@@ -71,15 +71,41 @@ interface BackendApi {
   getStatus(): Promise<any>
 }
 
-const api: BackendApi = (typeof window !== 'undefined' && (window as any).momaiApi) || {
-  connectToHomeAssistant: () => Promise.resolve({ connectionId: 'local', success: true }),
-  getDevices: () => Promise.resolve([]),
-  turnOnDevice: () => Promise.resolve({ success: true }),
-  turnOffDevice: () => Promise.resolve({ success: true }),
-  listConnections: () => Promise.resolve([]),
-  disconnectAll: () => Promise.resolve({ success: true }),
-  removeConnection: () => Promise.resolve({ success: true }),
-  getStatus: () => Promise.resolve({ connected: false, connections: [] })
+const EXT_ID = 'momaismarthome'
+
+function getApiBase(): string {
+  return (typeof window !== 'undefined' && (window as any).api?.getApiBaseUrl?.()) || 'http://127.0.0.1:8050'
+}
+
+function getSessionToken(): string {
+  return (typeof window !== 'undefined' && (window as any).api?.getSessionToken?.()) || ''
+}
+
+function extFetch(path: string, body?: any): Promise<any> {
+  return fetch(`${getApiBase()}${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Session-Token': getSessionToken()
+    },
+    body: body ? JSON.stringify(body) : undefined
+  }).then((r) => r.json())
+}
+
+async function sendCommand(toolName: string, args: any = {}): Promise<any> {
+  const res = await extFetch(`/extensions/${EXT_ID}/command`, { toolName, args })
+  return res
+}
+
+const api: BackendApi = {
+  connectToHomeAssistant: (url, token, name) => sendCommand('connectToHomeAssistant', { url, token, name }),
+  getDevices: (connectionId?) => sendCommand('getDevices', { connectionId }).then((r: any) => r.devices || []),
+  turnOnDevice: (deviceId, providerType?) => sendCommand('turnOnDevice', { deviceId, providerType }),
+  turnOffDevice: (deviceId, providerType?) => sendCommand('turnOffDevice', { deviceId, providerType }),
+  listConnections: () => sendCommand('listConnections').then((r: any) => r.connections || []),
+  disconnectAll: () => sendCommand('disconnectAll'),
+  removeConnection: (connectionId) => sendCommand('removeConnection', { connectionId }),
+  getStatus: () => sendCommand('getStatus')
 }
 
 export default function SmartHomePage() {
