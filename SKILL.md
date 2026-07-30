@@ -1,6 +1,6 @@
 ---
 name: MomAI Smart Home
-description: Integração com Home Assistant e suporte a múltiplos provedores de automação residencial.
+description: Controle dispositivos inteligentes da sua casa: luzes, temperatura, sensores, fechaduras, cortinas, câmeras e muito mais via Home Assistant.
 author: MomAI Team
 version: 1.0.0
 icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5z"/><path d="M6.5 12a7.8 7.8 0 0 1 11 0"/><path d="M9 15a3.6 3.6 0 0 1 6 0"/><path d="M12 18h.01"/></svg>
@@ -13,6 +13,30 @@ tags:
 permissions:
   - network
   - storage
+intents:
+  - luz
+  - luzes
+  - ligar
+  - desligar
+  - acender
+  - apagar
+  - temperatura
+  - termostato
+  - dispositivo
+  - dispositivos
+  - casa inteligente
+  - smart home
+  - sensor
+  - sensores
+  - cômodo
+  - iluminação
+  - climatização
+  - fechadura
+  - cortina
+  - persiana
+  - ventilador
+  - aspirador
+  - câmera
 tools:
   - name: control_device
     description: Liga, desliga ou ajusta um dispositivo inteligente
