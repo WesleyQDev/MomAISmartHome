@@ -1,149 +1,133 @@
 const path = require('path');
 
-// Carrega variáveis de ambiente do arquivo .env se existir
 try {
   require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
-} catch (e) {
-  // dotenv opcional se variáveis de ambiente já estiverem injetadas
-}
+} catch (e) {}
 
 const DatabaseManager = require('./database/database');
 const TokenManager = require('./auth/tokenManager');
-const GoogleAuthService = require('./auth/googleAuth');
+const HomeAssistantAuth = require('./auth/haAuth');
 const DeviceManager = require('./integrations/deviceManager');
 
 class MomAIHomeConnector {
   constructor(options = {}) {
     this.dbManager = new DatabaseManager(options.dbPath);
     this.tokenManager = new TokenManager(this.dbManager);
-    this.authService = new GoogleAuthService(options.authOptions);
+    this.auth = new HomeAssistantAuth(options.authOptions);
     this.devices = new DeviceManager();
 
-    this.userEmail = null;
     this.isConnected = false;
-    this.accessToken = null;
+    this.connections = [];
   }
 
-  /**
-   * Inicializa o banco de dados e verifica se existe uma sessão salva.
-   */
   async init() {
     await this.dbManager.init();
-    const session = await this.tokenManager.getSession();
+    const conns = await this.tokenManager.listConnections();
 
-    if (session && session.tokens) {
-      this.userEmail = session.email;
-      this.accessToken = session.tokens.access_token;
+    for (const conn of conns) {
+      try {
+        const full = await this.tokenManager.getConnection(conn.id);
+        if (!full) continue;
 
-      // Verifica se o access_token precisa de refresh
-      if (session.tokens.expiry_date && Date.now() >= session.tokens.expiry_date - 60000) {
-        if (session.tokens.refresh_token) {
-          try {
-            const newTokens = await this.authService.refreshAccessToken(session.tokens.refresh_token);
-            const updatedTokens = { ...session.tokens, ...newTokens };
-            await this.tokenManager.saveSession({ email: session.email, tokens: updatedTokens });
-            this.accessToken = updatedTokens.access_token;
-            this.isConnected = true;
-          } catch (err) {
-            console.warn('[MomAIHomeConnector] Erro ao renovar token de acesso:', err.message);
-            this.isConnected = false;
-          }
-        } else {
-          this.isConnected = false;
+        const result = await this.devices.registerProvider(full.providerType, full.config);
+        if (result.success) {
+          this.connections.push({ id: full.id, type: full.providerType, name: full.name, email: full.email });
+          this.isConnected = true;
         }
-      } else {
-        this.isConnected = true;
+      } catch (err) {
+        console.warn(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}:`, err.message);
       }
-    } else {
-      this.isConnected = false;
-      this.userEmail = null;
-      this.accessToken = null;
-    }
-
-    if (this.isConnected) {
-      await this.devices.connect(this.accessToken);
     }
 
     return this.getStatus();
   }
 
-  /**
-   * Inicia o fluxo de login Google OAuth 2.0 via Loopback HTTP local.
-   */
-  async login() {
+  async connectToHomeAssistant(url, token, name) {
     await this.dbManager.init();
-    const { tokens, email } = await this.authService.startLoopbackServer();
-    
-    await this.tokenManager.saveSession({ email, tokens });
-    this.userEmail = email;
-    this.accessToken = tokens.access_token;
+    this.auth.setCredentials(url, token);
+
+    const connectionId = 'ha_' + Date.now();
+    const displayName = name || 'Home Assistant';
+
+    const result = await this.devices.registerProvider('homeassistant', { url, token });
+
+    await this.tokenManager.saveConnection(
+      connectionId,
+      'homeassistant',
+      this.auth.toConfig(),
+      displayName,
+      'local'
+    );
+
+    const entities = await this.devices.listDevices('homeassistant');
+    await this.tokenManager.cacheEntities(connectionId, entities);
+
+    this.connections.push({ id: connectionId, type: 'homeassistant', name: displayName, email: 'local' });
     this.isConnected = true;
 
-    await this.devices.connect(this.accessToken);
-
-    return this.getStatus();
+    return { connectionId, ...result };
   }
 
-  /**
-   * Busca a lista de dispositivos reais autenticados no Google.
-   */
-  async getDevices() {
-    if (!this.isConnected || !this.accessToken) {
+  async listConnections() {
+    return this.tokenManager.listConnections();
+  }
+
+  async getDevices(connectionId) {
+    const status = this.devices.getStatus();
+    if (Object.keys(status.providers).length === 0) return [];
+
+    if (connectionId) {
+      const conn = this.connections.find((c) => c.id === connectionId);
+      if (conn) return this.devices.listDevices(conn.type);
       return [];
     }
-    return this.devices.listDevices(this.accessToken);
+
+    return this.devices.listDevices();
   }
 
-  /**
-   * Liga um dispositivo real via Google API.
-   */
-  async turnOnDevice(deviceId) {
-    return this.devices.turnOn(deviceId, this.accessToken);
+  async turnOnDevice(deviceId, connectionType) {
+    return this.devices.turnOn(deviceId, connectionType);
   }
 
-  /**
-   * Desliga um dispositivo real via Google API.
-   */
-  async turnOffDevice(deviceId) {
-    return this.devices.turnOff(deviceId, this.accessToken);
+  async turnOffDevice(deviceId, connectionType) {
+    return this.devices.turnOff(deviceId, connectionType);
   }
 
-  /**
-   * Encerra a sessão ativa, revoga tokens e limpa o banco de dados local.
-   */
-  async logout() {
-    const session = await this.tokenManager.getSession();
-    if (session && session.tokens) {
-      const tokenToRevoke = session.tokens.access_token || session.tokens.refresh_token;
-      if (tokenToRevoke) {
-        await this.authService.revokeToken(tokenToRevoke);
-      }
+  async callService(domain, service, data) {
+    return this.devices.callService(domain, service, data);
+  }
+
+  async removeConnection(connectionId) {
+    const conn = this.connections.find((c) => c.id === connectionId);
+    if (conn) {
+      await this.devices.unregisterProvider(conn.type);
+      this.connections = this.connections.filter((c) => c.id !== connectionId);
     }
-
-    await this.tokenManager.clearSession();
-    this.isConnected = false;
-    this.userEmail = null;
-    this.accessToken = null;
-
-    return {
-      success: true,
-      message: 'Sessão encerrada com sucesso.'
-    };
+    await this.tokenManager.removeConnection(connectionId);
+    this.isConnected = this.connections.length > 0;
+    return { success: true };
   }
 
-  /**
-   * Retorna o status atual da conexão e e-mail do usuário autenticado.
-   */
+  async disconnectAll() {
+    await this.devices.disconnectAll();
+    this.connections = [];
+    this.isConnected = false;
+    return { success: true, message: 'Todas as conexões encerradas.' };
+  }
+
   getStatus() {
     return {
       connected: this.isConnected,
-      email: this.userEmail,
-      status: this.isConnected ? 'AUTHENTICATED' : 'DISCONNECTED'
+      connections: this.connections.map((c) => ({
+        id: c.id,
+        type: c.type,
+        name: c.name
+      })),
+      providerStatus: this.devices.getStatus()
     };
   }
 }
 
-// Exporta tanto a Classe quanto uma instância Singleton padrão
 const defaultInstance = new MomAIHomeConnector();
 defaultInstance.MomAIHomeConnector = MomAIHomeConnector;
 

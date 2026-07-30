@@ -30,16 +30,48 @@ class DatabaseManager {
   }
 
   async _createTables() {
-    const query = `
-      CREATE TABLE IF NOT EXISTS sessions (
+    const queries = [
+      `CREATE TABLE IF NOT EXISTS connections (
+        id TEXT PRIMARY KEY,
+        provider_type TEXT NOT NULL,
+        name TEXT,
+        config_encrypted TEXT NOT NULL,
+        user_email TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS cached_entities (
+        entity_id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL,
+        name TEXT,
+        domain TEXT,
+        type_name TEXT,
+        room TEXT,
+        state_json TEXT,
+        attributes_json TEXT,
+        online INTEGER DEFAULT 1,
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (connection_id) REFERENCES connections(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS rooms (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        icon TEXT DEFAULT 'room',
+        FOREIGN KEY (connection_id) REFERENCES connections(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         user_email TEXT,
         encrypted_tokens TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-    return this.run(query);
+      )`
+    ];
+
+    for (const query of queries) {
+      await this.run(query);
+    }
   }
 
   run(sql, params = []) {

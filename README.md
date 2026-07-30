@@ -1,134 +1,114 @@
-# MomAI Home Connector (`MomAISmartHome`)
+# MomAI Smart Home (`MomAISmartHome`)
 
-Módulo/extensão local em Node.js puro para o ecossistema **MomAI**, projetado para gerenciar autenticação **Google OAuth 2.0 (Desktop Loopback)**, armazenar tokens locais criptografados em **SQLite (AES-256-GCM)** e prover uma camada abstrata para automação e controle de dispositivos de casa inteligente (**Smart Home / IoT**).
+Extensão local em Node.js para o ecossistema **MomAI** que conecta e gerencia dispositivos de automação residencial via **Home Assistant** e outros provedores plugáveis.
 
----
-
-## 🚀 Funcionalidades
-
-- **Zero Backend Remoto**: Autenticação direta com o Google via servidor HTTP local temporário (`http://127.0.0.1:3333/callback`).
-- **Segurança & Criptografia Local**: Tokens sensíveis (`access_token`, `refresh_token`, `id_token`) são criptografados com o algoritmo `AES-256-GCM` usando a biblioteca nativa `crypto` antes de serem gravados no banco SQLite local.
-- **Auto-Refresh de Session**: Renovação automática do token de acesso expirado via `refresh_token`.
-- **Abstração Smart Home (`DeviceManager`)**: Interface desacoplada para controle de dispositivos (Lâmpadas, Ar Condicionado, Tomadas) com suporte arquitetural para Matter, Home Assistant, Google Home API e Tuya.
+Armazena conexões de forma criptografada em **SQLite (AES-256-GCM)** e provê uma interface React para controle.
 
 ---
 
-## 🛠️ Requisitos e Instalação
+## Arquitetura de Provedores
 
-### 1. Dependências do Módulo
-No diretório `dev/MomAISmartHome`, instale as dependências executando:
+A extensão usa um padrão de **provedores** para suportar múltiplos sistemas de automação:
 
-```bash
-pnpm install
-# ou npm install
+```
+integrations/
+  provider.js              ← Classe base abstrata
+  providers/
+    homeAssistant.js       ← Provedor Home Assistant (REST API)
+  deviceManager.js         ← Registry/Facade que gerencia provedores
 ```
 
----
+Cada provedor implementa: `connect()`, `disconnect()`, `listDevices()`, `turnOn()`, `turnOff()`.
 
-## 🔐 Configuração do Google Cloud Console (OAuth 2.0 Desktop)
+### Adicionar novo provedor
 
-Para que o login Google funcione no ambiente desktop local do usuário, siga estes passos para obter seu Client ID e Client Secret:
-
-1. Acesse o [Google Cloud Console](https://console.cloud.google.com/).
-2. Crie um projeto novo ou selecione um existente (ex: `MomAI Smart Home`).
-3. Vá em **APIs e Serviços** > **Tela de permissão OAuth** (OAuth Consent Screen):
-   - Selecione **User Type**: **Externo** (External).
-   - Preencha o nome do aplicativo (ex: `MomAI Home Connector`) e e-mail de suporte.
-   - Na etapa de Escopos, adicione: `openid`, `.../auth/userinfo.email` e `.../auth/userinfo.profile`.
-   - Adicione seu e-mail na lista de **Usuários de teste** (Test users).
-4. Vá em **APIs e Serviços** > **Credenciais**:
-   - Clique em **+ Criar Credenciais** > **ID do cliente OAuth**.
-   - Tipo de aplicativo: Selecione **Aplicativo de Computador** (Desktop App).
-   - Nome: `MomAI Desktop Client`.
-5. Clique em **Criar** e copie os valores gerados para **ID de cliente** (`GOOGLE_CLIENT_ID`) e **Chave secreta do cliente** (`GOOGLE_CLIENT_SECRET`).
+1. Criar `src/integrations/providers/meuProvider.js` estendendo `BaseProvider`
+2. Registrar em `src/integrations/deviceManager.js` no `PROVIDER_REGISTRY`
+3. Os métodos do provider já são expostos automaticamente
 
 ---
 
-## ⚙️ Configuração do Arquivo `.env`
+## Configuração
 
-Crie um arquivo `.env` na raiz da extensão (`dev/MomAISmartHome/.env`) com base no `.env.example`:
+### Home Assistant
 
-```env
-# Credenciais obtidas no Google Cloud Console
-GOOGLE_CLIENT_ID=seu_client_id_aqui.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=seu_client_secret_aqui
-GOOGLE_REDIRECT_URI=http://127.0.0.1:3333/callback
+1. No Home Assistant, vá em **Perfil** → **Tokens de Acesso Long-Lived**
+2. Gere um token e copie
+3. Configure no arquivo `.env` ou na interface da extensão
 
-# Porta do servidor HTTP local temporário (loopback)
-PORT=3333
+```
+HA_URL=http://homeassistant.local:8123
+HA_TOKEN=seu_token_aqui
+```
 
-# Chave secreta de 32 caracteres para criptografia AES-256 dos tokens
-ENCRYPTION_KEY=momai_home_connector_secret_32b
+### Ambiente
 
-# Caminho do banco de dados SQLite local
+```
+ENCRYPTION_KEY=chave_de_32_caracteres
 DB_PATH=./data/smarthome.sqlite
 ```
 
 ---
 
-## 🔗 Vinculação Local da Extensão (`devsymlink`)
+## Estrutura do Projeto
 
-Para vincular esta extensão localmente na aplicação principal do MomAI via `devsymlink`, utilize a instrução de join:
+```
+├── src/
+│   ├── index.js              ← Entry point, orquestrador
+│   ├── page.tsx              ← UI React (bundlada com esbuild)
+│   ├── config/constants.js   ← Constantes de configuração
+│   ├── auth/
+│   │   ├── tokenManager.js   ← Criptografia AES-256-GCM + persistência
+│   │   └── haAuth.js         ← Gerenciamento de credenciais HA
+│   ├── database/
+│   │   └── database.js       ← SQLite wrapper
+│   └── integrations/
+│       ├── provider.js       ← Classe base de provedor
+│       ├── providers/
+│       │   └── homeAssistant.js ← Provedor Home Assistant
+│       └── deviceManager.js  ← Registry/Facade de provedores
+├── manifest.json
+├── build.mjs
+├── package.json
+└── pnpm-lock.yaml
+```
+
+## Banco de Dados
+
+| Tabela | Descrição |
+|--------|-----------|
+| `connections` | Conexões com provedores (url, token criptografado) |
+| `cached_entities` | Cache de dispositivos/entidades |
+| `rooms` | Cômodos mapeados |
+| `sessions` | (Compatibilidade) |
+
+## Comandos
 
 ```bash
-# Na aplicação principal MomAI:
-devsymlink/join C:\Users\wesle\dev\MomAISmartHome
+pnpm install
+pnpm test
+pnpm build    # build.mjs → dist/page.js
 ```
 
 ---
 
-## 📖 Exemplo Prático de Uso (`require`/`import`)
+## Provider Pattern: Google Home (futuro)
 
-Exemplo de como consumir a API exportada do `MomAIHomeConnector` dentro do ecossistema principal:
+Para adicionar suporte a Google Home no futuro, crie `integrations/providers/googleHome.js`:
 
-```javascript
-const connector = require('momai-smart-home');
-// ou caso usando ES Modules / TypeScript:
-// import connector from 'momai-smart-home';
-
-async function main() {
-  console.log('--- Inicializando MomAI Home Connector ---');
-  
-  // 1. Inicializa o banco de dados local e verifica sessão existente
-  const status = await connector.init();
-  console.log('Status da conexão:', status);
-  // Output: { connected: false, email: null, status: 'DISCONNECTED' }
-
-  // 2. Realiza o login (Abre o navegador padrão no fluxo Google OAuth 2.0 Loopback)
-  if (!status.connected) {
-    console.log('Iniciando login via Google OAuth...');
-    const authStatus = await connector.login();
-    console.log('Login concluído com sucesso:', authStatus);
-    // Output: { connected: true, email: 'usuario@gmail.com', status: 'AUTHENTICATED' }
-  }
-
-  // 3. Conecta e lista os dispositivos de automação residencial
-  await connector.devices.connect();
-  const devices = await connector.devices.listDevices();
-  console.log('Dispositivos disponíveis:', devices);
-
-  // 4. Controla um dispositivo específico
-  console.log('Ligando a Luz da Sala...');
-  const resOn = await connector.devices.turnOn('light_living_room');
-  console.log('Resultado:', resOn);
-
-  console.log('Desligando a Luz da Sala...');
-  const resOff = await connector.devices.turnOff('light_living_room');
-  console.log('Resultado:', resOff);
-
-  // 5. Encerrar sessão (logout)
-  // await connector.logout();
+```js
+const BaseProvider = require('../provider')
+class GoogleHomeProvider extends BaseProvider {
+  async connect() { /* OAuth 2.0 + HomeGraph API */ }
+  async listDevices() { /* GET /v1/devices:sync */ }
+  async turnOn(deviceId) { /* POST /v1/devices:reportStateAndNotification */ }
+  async turnOff(deviceId) { /* ... */ }
 }
-
-main().catch(console.error);
+module.exports = GoogleHomeProvider
 ```
 
----
-
-## 🧪 Executando os Testes Automatizados
-
-Para testar a inicialização, a criptografia SQLite e o `DeviceManager` localmente:
-
-```bash
-node test-runner.js
+Depois registre em `deviceManager.js`:
+```js
+const GoogleHomeProvider = require('./providers/googleHome')
+PROVIDER_REGISTRY['googlehome'] = GoogleHomeProvider
 ```

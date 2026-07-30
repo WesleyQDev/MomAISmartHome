@@ -1,189 +1,116 @@
-const https = require('https');
+const HomeAssistantProvider = require('./providers/homeAssistant');
+
+const PROVIDER_REGISTRY = {
+  homeassistant: HomeAssistantProvider
+};
 
 class DeviceManager {
   constructor() {
-    this.isConnected = false;
-    this.cachedDevices = new Map();
+    this.providers = new Map();
   }
 
-  /**
-   * Conecta ao ecossistema Google Home API e valida autenticação.
-   */
-  async connect(accessToken) {
-    this.isConnected = Boolean(accessToken);
+  async registerProvider(type, config = {}) {
+    const ProviderClass = PROVIDER_REGISTRY[type];
+    if (!ProviderClass) {
+      throw new Error(`Provider desconhecido: ${type}. Disponíveis: ${Object.keys(PROVIDER_REGISTRY).join(', ')}`);
+    }
+
+    if (this.providers.has(type)) {
+      await this.providers.get(type).disconnect();
+    }
+
+    const provider = new ProviderClass(config);
+    const result = await provider.connect();
+    this.providers.set(type, provider);
+    return result;
+  }
+
+  async unregisterProvider(type) {
+    const provider = this.providers.get(type);
+    if (provider) {
+      await provider.disconnect();
+      this.providers.delete(type);
+    }
+    return { success: true };
+  }
+
+  async listDevices(providerType) {
+    if (providerType) {
+      const provider = this.providers.get(providerType);
+      if (!provider) return [];
+      return provider.listDevices();
+    }
+
+    const allDevices = [];
+    for (const provider of this.providers.values()) {
+      try {
+        const devices = await provider.listDevices();
+        allDevices.push(...devices);
+      } catch (err) {
+        console.warn(`[DeviceManager] Erro ao listar devices de ${provider.name}:`, err.message);
+      }
+    }
+    return allDevices;
+  }
+
+  async turnOn(deviceId, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
+    return provider.turnOn(deviceId);
+  }
+
+  async turnOff(deviceId, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
+    return provider.turnOff(deviceId);
+  }
+
+  async callService(domain, service, data = {}, providerType) {
+    if (providerType) {
+      const provider = this.providers.get(providerType);
+      if (!provider) throw new Error(`Provider ${providerType} não encontrado`);
+      return provider.callService(domain, service, data);
+    }
+
+    for (const provider of this.providers.values()) {
+      if (typeof provider.callService === 'function') {
+        try {
+          return await provider.callService(domain, service, data);
+        } catch {}
+      }
+    }
+    throw new Error('Nenhum provider respondeu ao serviço');
+  }
+
+  getStatus() {
+    const statuses = {};
+    for (const [type, provider] of this.providers.entries()) {
+      statuses[type] = { connected: provider.connected, name: provider.name };
+    }
     return {
-      success: this.isConnected,
-      message: this.isConnected
-        ? 'Conexão com Google Home API ativada.'
-        : 'Aguardando autenticação Google OAuth 2.0.',
-      activeProviders: ['Google Home Graph API', 'Google Nest SDM API']
+      providers: statuses,
+      connected: this.providers.size > 0 && Array.from(this.providers.values()).some((p) => p.connected)
     };
   }
 
-  /**
-   * Consulta os dispositivos reais cadastrados na conta Google Home do usuário através da API oficial.
-   */
-  async listDevices(accessToken) {
-    if (!accessToken) {
-      return [];
+  async disconnectAll() {
+    for (const [type, provider] of this.providers.entries()) {
+      await provider.disconnect();
+    }
+    this.providers.clear();
+  }
+
+  _resolveProvider(deviceId, providerType) {
+    if (providerType) return this.providers.get(providerType);
+
+    for (const provider of this.providers.values()) {
+      if (provider.cachedDevices?.has(deviceId)) return provider;
     }
 
-    try {
-      // Chamada real para a API do Google HomeGraph (devices:sync)
-      const homeGraphDevices = await this._fetchGoogleHomeGraph(accessToken);
-      
-      const realDevices = homeGraphDevices.map((dev) => ({
-        id: dev.id,
-        name: dev.name?.name || dev.name?.defaultNames?.[0] || 'Dispositivo Google Home',
-        type: this._normalizeDeviceType(dev.type),
-        room: dev.roomHint || 'Google Home',
-        provider: 'Google Home Graph',
-        state: {
-          on: Boolean(dev.attributes?.on || dev.states?.on),
-          brightness: dev.attributes?.brightness || dev.states?.brightness || 80,
-          temperature: dev.attributes?.thermostatTemperatureSetpoint || 22
-        },
-        online: dev.willReportState !== false
-      }));
-
-      // Atualiza o cache local dos dispositivos sincronizados
-      this.cachedDevices.clear();
-      realDevices.forEach((d) => this.cachedDevices.set(d.id, d));
-
-      return realDevices;
-    } catch (err) {
-      console.warn('[DeviceManager] Aviso ao buscar dispositivos do Google Home Graph:', err.message);
-      // Retorna array de dispositivos em cache ou array vazio (NUNCA insere dispositivos falsos)
-      return Array.from(this.cachedDevices.values());
-    }
-  }
-
-  /**
-   * Liga o dispositivo especificado enviando o comando real à API do Google.
-   */
-  async turnOn(deviceId, accessToken) {
-    if (accessToken) {
-      await this._executeGoogleCommand(deviceId, 'action.devices.commands.OnOff', { on: true }, accessToken);
-    }
-
-    const device = this.cachedDevices.get(deviceId) || { id: deviceId, name: deviceId, state: {} };
-    if (device.state) device.state.on = true;
-    this.cachedDevices.set(deviceId, device);
-
-    return {
-      success: true,
-      deviceId,
-      action: 'turnOn',
-      device
-    };
-  }
-
-  /**
-   * Desliga o dispositivo especificado enviando o comando real à API do Google.
-   */
-  async turnOff(deviceId, accessToken) {
-    if (accessToken) {
-      await this._executeGoogleCommand(deviceId, 'action.devices.commands.OnOff', { on: false }, accessToken);
-    }
-
-    const device = this.cachedDevices.get(deviceId) || { id: deviceId, name: deviceId, state: {} };
-    if (device.state) device.state.on = false;
-    this.cachedDevices.set(deviceId, device);
-
-    return {
-      success: true,
-      deviceId,
-      action: 'turnOff',
-      device
-    };
-  }
-
-  /**
-   * Helper privado HTTP para realizar a busca no Google Home Graph API.
-   */
-  _fetchGoogleHomeGraph(accessToken) {
-    return new Promise((resolve) => {
-      const postData = JSON.stringify({ agentUserId: 'momai_user' });
-
-      const req = https.request(
-        'https://homegraph.googleapis.com/v1/devices:sync',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(postData)
-          }
-        },
-        (res) => {
-          let body = '';
-          res.on('data', (chunk) => (body += chunk));
-          res.on('end', () => {
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-              try {
-                const parsed = JSON.parse(body);
-                resolve(parsed.payload?.devices || []);
-              } catch (e) {
-                resolve([]);
-              }
-            } else {
-              // Se a conta não tiver o Home Graph ativo ou não tiver dispositivos, falha graciosa
-              resolve([]);
-            }
-          });
-        }
-      );
-
-      req.on('error', () => resolve([]));
-      req.write(postData);
-      req.end();
-    });
-  }
-
-  /**
-   * Helper privado para enviar comandos reais de controle de dispositivo ao Google Home.
-   */
-  _executeGoogleCommand(deviceId, commandName, params, accessToken) {
-    return new Promise((resolve) => {
-      const postData = JSON.stringify({
-        commands: [
-          {
-            devices: [{ id: deviceId }],
-            execution: [{ command: commandName, params }]
-          }
-        ]
-      });
-
-      const req = https.request(
-        'https://homegraph.googleapis.com/v1/devices:reportStateAndNotification',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(postData)
-          }
-        },
-        (res) => {
-          resolve(res.statusCode >= 200 && res.statusCode < 300);
-        }
-      );
-
-      req.on('error', () => resolve(false));
-      req.write(postData);
-      req.end();
-    });
-  }
-
-  _normalizeDeviceType(googleType = '') {
-    const typeUpper = googleType.toUpperCase();
-    if (typeUpper.includes('LIGHT')) return 'LIGHT';
-    if (typeUpper.includes('THERMOSTAT') || typeUpper.includes('AC')) return 'THERMOSTAT';
-    if (typeUpper.includes('LOCK')) return 'LOCK';
-    if (typeUpper.includes('CAMERA')) return 'CAMERA';
-    if (typeUpper.includes('TV') || typeUpper.includes('SPEAKER')) return 'TV';
-    return 'PLUG';
+    return this.providers.values().next().value || null;
   }
 }
+
+DeviceManager.PROVIDER_REGISTRY = PROVIDER_REGISTRY;
 
 module.exports = DeviceManager;
