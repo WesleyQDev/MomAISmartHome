@@ -14,31 +14,45 @@ permissions:
   - network
   - storage
 tools:
-  - name: connectToHomeAssistant
-    description: Conecta a um servidor Home Assistant
+  - name: control_device
+    description: Liga, desliga ou ajusta um dispositivo inteligente
+    parameters:
+      type: object
+      required:
+        - device_name
+        - action
+      properties:
+        device_name:
+          type: string
+          description: Nome do dispositivo
+        action:
+          type: string
+          enum:
+            - on
+            - off
+            - toggle
+          description: Ação a executar
+        brightness:
+          type: number
+          description: Brilho (0-100) apenas para luzes
+  - name: list_devices
+    description: Lista todos os dispositivos com seus estados atuais
     parameters:
       type: object
       properties:
-        url:
+        room:
           type: string
-          description: URL do servidor Home Assistant
-        token:
+          description: Filtrar por cômodo
+  - name: query_device
+    description: Obtém o estado detalhado de um dispositivo
+    parameters:
+      type: object
+      required:
+        - device_name
+      properties:
+        device_name:
           type: string
-          description: Long-Lived Access Token
-  - name: listDevices
-    description: Lista dispositivos de todas as conexões
-  - name: turnOnDevice
-    description: Liga um dispositivo
-  - name: turnOffDevice
-    description: Desliga um dispositivo
-  - name: callService
-    description: Chama qualquer serviço do Home Assistant
-  - name: listConnections
-    description: Lista conexões salvas
-  - name: removeConnection
-    description: Remove uma conexão
-  - name: getStatus
-    description: Status atual das conexões
+          description: Nome do dispositivo
 ---
 
 Integração com Home Assistant e suporte a múltiplos provedores de automação residencial. Controle luzes, climatização, sensores, câmeras e muito mais.
