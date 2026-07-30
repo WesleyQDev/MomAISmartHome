@@ -4,6 +4,8 @@ try {
   require('dotenv').config({ path: path.join(__dirname, '.env') })
 } catch (e) {}
 
+process.env.DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'smarthome.sqlite')
+
 const connector = require('./src/index')
 
 let deviceCache = { names: [], byRoom: {} }
