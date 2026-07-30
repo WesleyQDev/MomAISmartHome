@@ -116,21 +116,28 @@ process.on('message', async (msg) => {
 })
 
 async function matchDevice(query) {
+  if (!query || typeof query !== 'string') return null
   await connector.init()
   const devices = await connector.getDevices()
   const q = query.toLowerCase().trim()
+  if (!q) return null
   const exact = devices.find((d) => d.name.toLowerCase() === q)
   if (exact) return exact
   const partial = devices.find((d) => d.name.toLowerCase().includes(q) || d.id.toLowerCase().includes(q))
   if (partial) return partial
-  const words = q.split(/\s+/)
-  const best = devices.find((d) => words.some((w) => d.name.toLowerCase().includes(w)))
+  const words = q.split(/\s+/).filter((w) => !['da', 'do', 'das', 'dos', 'de', 'a', 'o', 'e', 'para', 'com'].includes(w))
+  const best = devices.find((d) => words.some((w) => w.length > 2 && d.name.toLowerCase().includes(w)))
   return best || null
 }
 
 async function executeTool(toolName, args) {
   switch (toolName) {
     case 'control_device': {
+      if (!args.device_name || !args.action) {
+        const all = await connector.getDevices().catch(() => [])
+        const names = all.map((d) => d.name).join(', ')
+        return { ok: false, error: `Informe device_name e action. Dispositivos disponíveis: ${names || 'Nenhum conectado'}` }
+      }
       await connector.init()
       const device = await matchDevice(args.device_name)
       if (!device) {
@@ -138,13 +145,17 @@ async function executeTool(toolName, args) {
         return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
       }
       let result
+      const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
       if (args.action === 'on' || args.action === 'toggle') {
-        result = await connector.turnOnDevice(device.id, device.provider?.toLowerCase())
+        result = await connector.turnOnDevice(device.id, provider)
       } else {
-        result = await connector.turnOffDevice(device.id, device.provider?.toLowerCase())
+        result = await connector.turnOffDevice(device.id, provider)
       }
       await refreshDeviceCache()
-      return { ok: true, device: device.name, action: args.action, result }
+      if (result && result.success === false) {
+        return { ok: false, error: `Falha ao ${args.action === 'on' ? 'ligar' : 'desligar'} "${device.name}": ${result.error || 'erro desconhecido'}` }
+      }
+      return { ok: true, device: device.name, action: args.action }
     }
 
     case 'list_devices': {
