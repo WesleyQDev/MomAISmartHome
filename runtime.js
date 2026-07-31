@@ -193,6 +193,20 @@ const tools = module.exports.tools = [
         }
       }
     }
+  },
+  {
+    name: 'open_device_control',
+    description: 'Abre a interface de controle flutuante (overlay window) de um dispositivo específico (TV, controle remoto, lâmpada, ar condicionado, etc) quando o usuário pede para abrir ou exibir a tela de controle do dispositivo.',
+    parameters: {
+      type: 'object',
+      required: ['device_name'],
+      properties: {
+        device_name: {
+          type: 'string',
+          description: 'Nome do dispositivo cujo controle deve ser exibido (ex: "televisão", "luz da sala", "ar condicionado")'
+        }
+      }
+    }
   }
 ]
 
@@ -208,8 +222,8 @@ process.on('message', async (msg) => {
   if (msg.type === 'execute') {
     try {
       const { requestId, payload } = msg
-      const { toolName, args = {} } = payload || {}
-      const result = await executeTool(toolName, args)
+      const { toolName, args = {}, momai } = payload || {}
+      const result = await executeTool(toolName, args, momai)
       process.send({ type: 'response', requestId, result })
     } catch (err) {
       process.send({
@@ -223,22 +237,97 @@ process.on('message', async (msg) => {
   }
 })
 
-async function matchDevice(query) {
-  if (!query || typeof query !== 'string') return null
-  await connector.init()
-  const devices = await connector.getDevices()
-  const q = query.toLowerCase().trim()
-  if (!q) return null
-  const exact = devices.find((d) => d.name.toLowerCase() === q)
-  if (exact) return exact
-  const partial = devices.find((d) => d.name.toLowerCase().includes(q) || d.id.toLowerCase().includes(q))
-  if (partial) return partial
-  const words = q.split(/\s+/).filter((w) => !['da', 'do', 'das', 'dos', 'de', 'a', 'o', 'e', 'para', 'com'].includes(w))
-  const best = devices.find((d) => words.some((w) => w.length > 2 && d.name.toLowerCase().includes(w)))
-  return best || null
+function normalizeString(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
 }
 
-async function executeTool(toolName, args) {
+async function matchDevice(query, momai) {
+  if (!query || typeof query !== 'string') return null
+  await connector.ensureConnected(momai).catch(() => {})
+  const devices = await connector.getDevices()
+  if (!devices || devices.length === 0) return null
+
+  const normQuery = normalizeString(query)
+  if (!normQuery) return null
+
+  // 1. Exact match on name or ID
+  const exact = devices.find(
+    (d) => normalizeString(d.name) === normQuery || normalizeString(d.id) === normQuery
+  )
+  if (exact) return exact
+
+  // 2. Partial match on full query
+  const partial = devices.find(
+    (d) => normalizeString(d.name).includes(normQuery) || normalizeString(d.id).includes(normQuery)
+  )
+  if (partial) return partial
+
+  // 3. Stopwords & Synonym expansion
+  const STOP_WORDS = new Set(['da', 'do', 'das', 'dos', 'de', 'a', 'o', 'e', 'para', 'com', 'meu', 'minha', 'seu', 'sua'])
+  const tokens = normQuery
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9]/g, ''))
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w))
+
+  if (tokens.length === 0) return null
+
+  const SYNONYMS = {
+    tv: ['televisao', 'television', 'tv', 'media_player', 'remote'],
+    televisao: ['tv', 'television', 'televisao', 'media_player'],
+    luz: ['lampada', 'iluminacao', 'light', 'led'],
+    lampada: ['luz', 'iluminacao', 'light', 'led'],
+    ar: ['clima', 'termostato', 'arcondicionado', 'climate'],
+    clima: ['ar', 'termostato', 'climate']
+  }
+
+  // 4. Score-based token matching
+  let bestDevice = null
+  let maxScore = 0
+
+  for (const device of devices) {
+    const normName = normalizeString(device.name)
+    const normId = normalizeString(device.id)
+    const normRoom = normalizeString(device.room)
+
+    let score = 0
+
+    for (const token of tokens) {
+      const matchPatterns = SYNONYMS[token] || [token]
+      const matchesName = matchPatterns.some((p) => normName.includes(p))
+      const matchesId = matchPatterns.some((p) => normId.includes(p))
+      const matchesRoom = matchPatterns.some((p) => normRoom.includes(p))
+
+      if (matchesName) score += 3
+      if (matchesId) score += 2
+      if (matchesRoom) score += 2
+    }
+
+    if (score > maxScore) {
+      maxScore = score
+      bestDevice = device
+    }
+  }
+
+  return maxScore > 0 ? bestDevice : null
+}
+
+async function executeTool(toolName, args, momai) {
+  if (typeof toolName === 'object' && toolName !== null) {
+    const opts = toolName
+    toolName = opts.toolName || opts.name
+    args = opts.args || opts.parameters || {}
+    momai = opts.momai || momai
+  }
+  args = args || {}
+
+  if (toolName !== 'connectToHomeAssistant') {
+    await connector.ensureConnected(momai).catch(() => {})
+  }
+
   switch (toolName) {
     case 'control_device': {
       if (!args.device_name || !args.action) {
@@ -246,15 +335,16 @@ async function executeTool(toolName, args) {
         const names = all.map((d) => d.name).join(', ')
         return { ok: false, error: `Informe device_name e action. Dispositivos disponíveis: ${names || 'Nenhum conectado'}` }
       }
-      await connector.init()
-      const device = await matchDevice(args.device_name)
+      const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
         return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
       }
       let result
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
-      if (args.action === 'on' || args.action === 'toggle' || args.color || args.brightness !== undefined) {
+      if (args.action === 'toggle') {
+        result = await connector.toggleDevice(device.id, provider)
+      } else if (args.action === 'on') {
         result = await connector.turnOnDevice(device.id, provider, {
           brightness: args.brightness,
           color: args.color,
@@ -272,8 +362,7 @@ async function executeTool(toolName, args) {
 
     case 'set_light_color': {
       if (!args.device_name) return { ok: false, error: 'Informe device_name' }
-      await connector.init()
-      const device = await matchDevice(args.device_name)
+      const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
         return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
@@ -285,13 +374,13 @@ async function executeTool(toolName, args) {
         color_temp: args.color_temp
       })
       await refreshDeviceCache()
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao atualizar a luz' }
       return { ok: true, device: device.name, result }
     }
 
     case 'control_tv_remote': {
       if (!args.device_name) return { ok: false, error: 'Informe device_name' }
-      await connector.init()
-      const device = await matchDevice(args.device_name)
+      const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
         return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
@@ -305,31 +394,30 @@ async function executeTool(toolName, args) {
       } else {
         return { ok: false, error: 'Informe command ou action' }
       }
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a mídia' }
       return { ok: true, device: device.name, result }
     }
 
     case 'control_climate': {
       if (!args.device_name) return { ok: false, error: 'Informe device_name' }
-      await connector.init()
-      const device = await matchDevice(args.device_name)
+      const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
         return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
       }
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
       const result = await connector.setClimate(device.id, args.temperature, args.hvac_mode, provider)
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a climatização' }
       return { ok: true, device: device.name, result }
     }
 
     case 'call_ha_service': {
       if (!args.domain || !args.service) return { ok: false, error: 'Informe domain e service' }
-      await connector.init()
       const result = await connector.callService(args.domain, args.service, args.data || {})
       return { ok: true, result }
     }
 
     case 'list_devices': {
-      await connector.init()
       const devices = await connector.getDevices(args.connectionId)
       const filtered = args.room ? devices.filter((d) => d.room?.toLowerCase() === args.room.toLowerCase()) : devices
       return {
@@ -348,14 +436,76 @@ async function executeTool(toolName, args) {
     }
 
     case 'query_device': {
-      await connector.init()
-      const device = await matchDevice(args.device_name)
-      if (!device) return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado` }
+      const device = await matchDevice(args.device_name, momai)
+      if (!device) {
+        const all = await connector.getDevices().catch(() => [])
+        const names = all.map((d) => d.name).join(', ')
+        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado.${names ? ' Disponíveis: ' + names : ''}` }
+      }
       return { ok: true, device }
     }
 
+    case 'open_device_control': {
+      const device = await matchDevice(args.device_name, momai)
+      if (!device) {
+        const all = await connector.getDevices().catch(() => [])
+        const names = all.map((d) => d.name).join(', ')
+        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado.${names ? ' Dispositivos disponíveis: ' + names : ''}` }
+      }
+
+      const allDevices = await connector.getDevices().catch(() => [device])
+
+      let overlayWidth = 440
+      let overlayHeight = 520
+
+      if (device.domain === 'media_player' || device.domain === 'remote') {
+        overlayWidth = 420
+        overlayHeight = 640
+      } else if (device.domain === 'light') {
+        overlayWidth = 400
+        overlayHeight = 560
+      } else if (device.domain === 'climate') {
+        overlayWidth = 420
+        overlayHeight = 480
+      }
+
+      const overlayPayload = {
+        skillId: 'momaismarthome',
+        panel: 'dist/panel.js',
+        panelType: 'momaismarthome-panel',
+        overlaySize: { width: overlayWidth, height: overlayHeight },
+        structuredResponse: {
+          type: 'momaismarthome-panel',
+          data: {
+            device,
+            allDevices
+          }
+        }
+      }
+
+      const dispatchEvent = (momai && typeof momai.sendEvent === 'function')
+        ? (type, payload) => momai.sendEvent(type, payload)
+        : (type, payload) => {
+            if (typeof process.send === 'function') {
+              process.send({ type: 'event', eventType: type, data: payload })
+            }
+          }
+
+      try {
+        dispatchEvent('open_overlay', overlayPayload)
+      } catch (err) {
+        console.warn('[runtime] Erro ao enviar sendEvent:', err)
+      }
+
+      return {
+        ok: true,
+        tool: 'open_device_control',
+        instruction: `Interface de controle do dispositivo "${device.name}" aberta com sucesso no overlay flutuante.`
+      }
+    }
+
     case 'connectToHomeAssistant': {
-      const result = await connector.connectToHomeAssistant(args.url, args.token, args.name)
+      const result = await connector.connectToHomeAssistant(args.url, args.token, args.name, momai)
       await refreshDeviceCache()
       return { ok: true, ...result }
     }
@@ -365,16 +515,33 @@ async function executeTool(toolName, args) {
       return { ok: true, devices }
     }
 
+    case 'getDeviceState': {
+      const device = await connector.getDeviceState(args.deviceId, args.providerType)
+      return { ok: Boolean(device), device }
+    }
+
     case 'turnOnDevice': {
-      const result = await connector.turnOnDevice(args.deviceId, args.providerType)
+      const result = await connector.turnOnDevice(args.deviceId, args.providerType, args.params || {})
       await refreshDeviceCache()
-      return { ok: true, ...result }
+      return { ok: result?.success !== false, ...result }
     }
 
     case 'turnOffDevice': {
-      const result = await connector.turnOffDevice(args.deviceId, args.providerType)
+      const result = await connector.turnOffDevice(args.deviceId, args.providerType, args.params || {})
       await refreshDeviceCache()
-      return { ok: true, ...result }
+      return { ok: result?.success !== false, ...result }
+    }
+
+    case 'toggleDevice': {
+      const result = await connector.toggleDevice(args.deviceId, args.providerType)
+      await refreshDeviceCache()
+      return { ok: result?.success !== false, ...result }
+    }
+
+    case 'setClimate': {
+      const result = await connector.setClimate(args.deviceId, args.temperature, args.hvacMode, args.providerType)
+      await refreshDeviceCache()
+      return { ok: result?.success !== false, ...result }
     }
 
     case 'listConnections': {
@@ -387,13 +554,18 @@ async function executeTool(toolName, args) {
       return { ok: true, ...status }
     }
 
+    case 'getLastConnection': {
+      const result = await connector.getLastConnection(momai)
+      return { ok: true, ...result }
+    }
+
     case 'disconnectAll': {
-      const result = await connector.disconnectAll()
+      const result = await connector.disconnectAll(momai)
       return { ok: true, ...result }
     }
 
     case 'removeConnection': {
-      const result = await connector.removeConnection(args.connectionId)
+      const result = await connector.removeConnection(args.connectionId, momai)
       return { ok: true, ...result }
     }
 

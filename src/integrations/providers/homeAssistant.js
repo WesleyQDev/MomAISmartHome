@@ -100,7 +100,9 @@ class HomeAssistantProvider extends BaseProvider {
           method: 'GET',
           headers: {
             Authorization: `Bearer ${this.token}`,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store',
+            Pragma: 'no-cache'
           }
         },
         (res) => {
@@ -115,6 +117,7 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
+      req.setTimeout(15000, () => req.destroy(new Error('Tempo limite ao consultar o Home Assistant')))
       req.on('error', reject)
       req.end()
     })
@@ -149,6 +152,7 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
+      req.setTimeout(15000, () => req.destroy(new Error('Tempo limite ao chamar o Home Assistant')))
       req.on('error', reject)
       req.write(postData)
       req.end()
@@ -204,11 +208,32 @@ class HomeAssistantProvider extends BaseProvider {
     }
   }
 
+  async getDeviceState(deviceId) {
+    if (!this.connected || !deviceId) return null
+
+    try {
+      const state = await this._get(`/api/states/${encodeURIComponent(deviceId)}?refresh=${Date.now()}`)
+      if (!state) return null
+      const device = this._normalizeEntity(state)
+      this.cachedDevices.set(device.id, device)
+      return device
+    } catch (err) {
+      console.warn('[HAProvider] Erro ao consultar estado do dispositivo:', err.message)
+      return null
+    }
+  }
+
   async turnOn(deviceId, params = {}) {
     const device = this.cachedDevices.get(deviceId)
     const domain = deviceId.split('.')[0]
 
     const haPayload = { entity_id: deviceId }
+    let servicePath = `/api/services/${domain}/turn_on`
+    if (domain === 'lock') {
+      servicePath = `/api/services/lock/unlock`
+    } else if (domain === 'cover') {
+      servicePath = `/api/services/cover/open_cover`
+    }
 
     if (domain === 'light') {
       if (params.brightness !== undefined && params.brightness !== null) {
@@ -230,8 +255,12 @@ class HomeAssistantProvider extends BaseProvider {
     }
 
     try {
-      await this._post(`/api/services/${domain}/turn_on`, haPayload)
-      if (device && device.state) device.state.on = true
+      await this._post(servicePath, haPayload)
+      if (device && device.state) {
+        device.state.on = true
+        if (domain === 'cover') device.state.isOpen = true
+        if (domain === 'lock') device.state.locked = false
+      }
       if (device) this.cachedDevices.set(deviceId, device)
       return { success: true, deviceId, action: 'turnOn', payload: haPayload }
     } catch (err) {
@@ -242,14 +271,39 @@ class HomeAssistantProvider extends BaseProvider {
   async turnOff(deviceId, params = {}) {
     const device = this.cachedDevices.get(deviceId)
     const domain = deviceId.split('.')[0]
+    let servicePath = `/api/services/${domain}/turn_off`
+    if (domain === 'lock') {
+      servicePath = `/api/services/lock/lock`
+    } else if (domain === 'cover') {
+      servicePath = `/api/services/cover/close_cover`
+    }
     try {
-      await this._post(`/api/services/${domain}/turn_off`, { entity_id: deviceId, ...params })
-      if (device && device.state) device.state.on = false
+      await this._post(servicePath, { entity_id: deviceId, ...params })
+      if (device && device.state) {
+        device.state.on = false
+        if (domain === 'cover') device.state.isOpen = false
+        if (domain === 'lock') device.state.locked = true
+      }
       if (device) this.cachedDevices.set(deviceId, device)
       return { success: true, deviceId, action: 'turnOff' }
     } catch (err) {
       return { success: false, error: err.message }
     }
+  }
+
+  async toggle(deviceId) {
+    const domain = deviceId.split('.')[0]
+    const device = this.cachedDevices.get(deviceId)
+    const toggleDomains = new Set(['light', 'switch', 'fan', 'automation', 'input_boolean'])
+    if (toggleDomains.has(domain)) {
+      try {
+        await this._post(`/api/services/${domain}/toggle`, { entity_id: deviceId })
+        return { success: true, deviceId, action: 'toggle' }
+      } catch (err) {
+        return { success: false, error: err.message }
+      }
+    }
+    return device?.state?.on ? this.turnOff(deviceId) : this.turnOn(deviceId)
   }
 
   async sendRemoteCommand(deviceId, command, extra = {}) {
@@ -325,6 +379,26 @@ class HomeAssistantProvider extends BaseProvider {
     const domain = state.entity_id?.split('.')[0]
     const domainInfo = HA_DOMAINS[domain] || { name: domain, icon: 'help' }
     const attrs = state.attributes || {}
+    const rawState = String(state.state || '').toLowerCase().trim()
+
+    let isOn = false
+    if (domain === 'light' || domain === 'switch' || domain === 'fan' || domain === 'automation' || domain === 'remote' || domain === 'input_boolean') {
+      isOn = rawState === 'on' || rawState === 'home' || rawState === 'active'
+    } else if (domain === 'climate') {
+      isOn = rawState !== 'off' && rawState !== 'unavailable' && rawState !== 'unknown'
+    } else if (domain === 'media_player') {
+      isOn = rawState !== 'off' && rawState !== 'standby' && rawState !== 'unavailable' && rawState !== 'unknown'
+    } else if (domain === 'lock') {
+      isOn = rawState === 'unlocked' || rawState === 'unlocking'
+    } else if (domain === 'cover') {
+      isOn = rawState === 'open' || rawState === 'opening'
+    } else if (domain === 'vacuum') {
+      isOn = rawState === 'cleaning' || rawState === 'returning' || rawState === 'on'
+    } else if (domain === 'sensor' || domain === 'sun' || domain === 'weather') {
+      isOn = false
+    } else {
+      isOn = rawState === 'on' || rawState === 'home' || rawState === 'open' || rawState === 'playing' || rawState === 'active' || (rawState !== 'off' && rawState !== 'unavailable' && rawState !== 'unknown' && rawState !== 'standby' && rawState !== 'closed' && rawState !== 'locked')
+    }
 
     const normalized = {
       id: state.entity_id,
@@ -334,8 +408,11 @@ class HomeAssistantProvider extends BaseProvider {
       icon: domainInfo.icon,
       provider: this.name,
       room: attrs.area_id || attrs.area || '',
-      online: true,
-      state: { on: state.state === 'on' || state.state === 'home' || state.state === 'open' },
+      online: rawState !== 'unavailable' && rawState !== 'unknown',
+      state: {
+        on: isOn,
+        rawState: state.state
+      },
       attributes: {
         deviceClass: attrs.device_class || null,
         unitOfMeasurement: attrs.unit_of_measurement || null,
@@ -355,14 +432,14 @@ class HomeAssistantProvider extends BaseProvider {
       normalized.attributes.supported = domainInfo.services
     } else if (domain === 'cover') {
       normalized.state.position = attrs.current_position ?? null
-      normalized.state.isOpen = state.state === 'open'
-    } else if (domain === 'sensor') {
+      normalized.state.isOpen = rawState === 'open' || rawState === 'opening'
+    } else if (domain === 'sensor' || domain === 'binary_sensor') {
       normalized.state.value = state.state
       normalized.state.unit = attrs.unit_of_measurement || ''
     } else if (domain === 'lock') {
-      normalized.state.locked = state.state === 'locked'
+      normalized.state.locked = rawState === 'locked'
     } else if (domain === 'media_player') {
-      normalized.state.volume = attrs.volume_level || null
+      normalized.state.volume = attrs.volume_level ?? null
       normalized.state.source = attrs.source || null
       normalized.state.mediaTitle = attrs.media_title || null
     } else if (domain === 'sun') {

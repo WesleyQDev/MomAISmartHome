@@ -1,10 +1,26 @@
 const crypto = require('crypto');
-const { ENCRYPTION_ALGORITHM, IV_LENGTH, DEFAULT_ENCRYPTION_KEY } = require('../config/constants');
+const fs = require('fs');
+const path = require('path');
+const { ENCRYPTION_ALGORITHM, IV_LENGTH, ENCRYPTION_KEY_PATH } = require('../config/constants');
+
+const LEGACY_ENCRYPTION_KEY = 'momai_home_connector_secret_32b';
 
 class TokenManager {
   constructor(dbManager) {
     this.dbManager = dbManager;
-    this.encryptionSecret = process.env.ENCRYPTION_KEY || DEFAULT_ENCRYPTION_KEY;
+    this.encryptionSecret = process.env.ENCRYPTION_KEY || this._loadOrCreateKey();
+  }
+
+  _loadOrCreateKey() {
+    try {
+      const existing = fs.readFileSync(ENCRYPTION_KEY_PATH, 'utf8').trim();
+      if (existing) return existing;
+    } catch {}
+
+    const key = crypto.randomBytes(32).toString('hex');
+    fs.mkdirSync(path.dirname(ENCRYPTION_KEY_PATH), { recursive: true });
+    fs.writeFileSync(ENCRYPTION_KEY_PATH, key, { encoding: 'utf8', mode: 0o600 });
+    return key;
   }
 
   _getKey() {
@@ -29,8 +45,8 @@ class TokenManager {
     };
   }
 
-  decrypt(encryptedPayload) {
-    const key = this._getKey();
+  decrypt(encryptedPayload, secret = this.encryptionSecret) {
+    const key = crypto.createHash('sha256').update(String(secret)).digest();
     const iv = Buffer.from(encryptedPayload.iv, 'hex');
     const authTag = Buffer.from(encryptedPayload.authTag, 'hex');
 
@@ -68,9 +84,23 @@ class TokenManager {
 
     if (!row) return null;
 
+    let config;
+    let migrated = false;
     try {
       const encryptedPayload = JSON.parse(row.config_encrypted);
-      const config = this.decrypt(encryptedPayload);
+      try {
+        config = this.decrypt(encryptedPayload);
+      } catch {
+        // Re-encrypt records created before per-install keys were introduced.
+        config = this.decrypt(encryptedPayload, LEGACY_ENCRYPTION_KEY);
+        migrated = true;
+      }
+      if (migrated) {
+        await this.dbManager.run(
+          `UPDATE connections SET config_encrypted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [JSON.stringify(this.encrypt(config)), id]
+        );
+      }
       return {
         id: row.id,
         providerType: row.provider_type,

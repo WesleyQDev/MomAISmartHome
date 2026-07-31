@@ -1,10 +1,12 @@
 {
   "name": "momai-smart-home",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MomAI Smart Home - Extensão de automação residencial com suporte a Home Assistant e provedores plugáveis",
   "main": "src/index.js",
   "scripts": {
-    "test": "node test-runner.js"
+    "build": "node build.mjs",
+    "test": "node test-runner.js",
+    "check": "pnpm build && pnpm test"
   },
   "keywords": [
     "momai",
@@ -18,8 +20,7 @@
   "license": "MIT",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "sqlite3"
+      "better-sqlite3"
     ]
   },
   "devDependencies": {
@@ -27,7 +28,6 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.2",
-    "dotenv": "^16.4.5",
-    "sqlite3": "^5.1.7"
+    "dotenv": "^16.4.5"
   }
 }

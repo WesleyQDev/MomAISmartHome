@@ -1,13 +1,13 @@
 import esbuild from 'esbuild'
 
-esbuild
-  .build({
-    entryPoints: ['src/page.tsx'],
-    bundle: true,
-    format: 'esm',
-    outfile: 'dist/page.js',
-    external: ['react', 'react-dom', 'react/jsx-runtime', '@heroicons/react'],
-    loader: { '.tsx': 'tsx', '.ts': 'ts' }
-  })
-  .then(() => console.log('Build concluído -> dist/page.js'))
-  .catch(() => process.exit(1))
+await esbuild.build({
+  entryPoints: ['src/page.tsx', 'src/panel.tsx'],
+  outdir: 'dist',
+  entryNames: '[name]',
+  bundle: true,
+  format: 'esm',
+  external: ['react', 'react-dom', 'react/jsx-runtime', '@heroicons/react'],
+  loader: { '.tsx': 'tsx', '.ts': 'ts' }
+})
+
+console.log('Build concluído -> dist/page.js e dist/panel.js')

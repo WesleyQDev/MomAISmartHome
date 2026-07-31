@@ -53,6 +53,12 @@ class DeviceManager {
     return allDevices;
   }
 
+  async getDeviceState(deviceId, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider || typeof provider.getDeviceState !== 'function') return null;
+    return provider.getDeviceState(deviceId);
+  }
+
   async turnOn(deviceId, providerType, params = {}) {
     const provider = this._resolveProvider(deviceId, providerType);
     if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
@@ -63,6 +69,14 @@ class DeviceManager {
     const provider = this._resolveProvider(deviceId, providerType);
     if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
     return provider.turnOff(deviceId, params);
+  }
+
+  async toggle(deviceId, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider || typeof provider.toggle !== 'function') {
+      return { success: false, error: 'Provider não suporta alternância para este dispositivo' };
+    }
+    return provider.toggle(deviceId);
   }
 
   async sendRemoteCommand(deviceId, command, extra = {}, providerType) {

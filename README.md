@@ -1,114 +1,93 @@
-# MomAI Smart Home (`MomAISmartHome`)
+# 🏠 MomAI Smart Home
 
-Extensão local em Node.js para o ecossistema **MomAI** que conecta e gerencia dispositivos de automação residencial via **Home Assistant** e outros provedores plugáveis.
-
-Armazena conexões de forma criptografada em **SQLite (AES-256-GCM)** e provê uma interface React para controle.
+A **MomAI Smart Home** é a extensão oficial de automação residencial para a assistente virtual **MomAI**. Ela permite controlar dispositivos inteligentes da sua casa diretamente por comandos em linguagem natural na conversa ou através de um painel interativo dedicado.
 
 ---
 
-## Arquitetura de Provedores
+## 💡 Sobre a Extensão
 
-A extensão usa um padrão de **provedores** para suportar múltiplos sistemas de automação:
+A extensão conecta a **MomAI** aos seus ecossistemas de casa inteligente. Atualmente, possui integração nativa e completa com o **Home Assistant**, com suporte planejado para outras plataformas populares no futuro, tais como:
 
-```
-integrations/
-  provider.js              ← Classe base abstrata
-  providers/
-    homeAssistant.js       ← Provedor Home Assistant (REST API)
-  deviceManager.js         ← Registry/Facade que gerencia provedores
-```
-
-Cada provedor implementa: `connect()`, `disconnect()`, `listDevices()`, `turnOn()`, `turnOff()`.
-
-### Adicionar novo provedor
-
-1. Criar `src/integrations/providers/meuProvider.js` estendendo `BaseProvider`
-2. Registrar em `src/integrations/deviceManager.js` no `PROVIDER_REGISTRY`
-3. Os métodos do provider já são expostos automaticamente
+- 🔹 **Home Assistant** *(Suportado atualmente)*
+- 🔹 **Google Home** *(Em planejamento)*
+- 🔹 **Samsung SmartThings** *(Em planejamento)*
+- 🔹 **Tuya / Smart Life** *(Em planejamento)*
 
 ---
 
-## Configuração
+## 🏡 O que é o Home Assistant?
 
-### Home Assistant
+O **Home Assistant** é uma plataforma de automação residencial de código aberto (open-source) que centraliza o gerenciamento de dispositivos inteligentes de diferentes marcas e fabricantes em um único lugar local.
 
-1. No Home Assistant, vá em **Perfil** → **Tokens de Acesso Long-Lived**
-2. Gere um token e copie
-3. Configure no arquivo `.env` ou na interface da extensão
+Com ele, você pode integrar:
+- 💡 **Lâmpadas e fitas LED** (brilho, cores RGB, temperatura de cor)
+- 🌡️ **Termostatos e ar-condicionado**
+- 🔒 **Fechaduras e sensores de presença/porta**
+- 📺 **Smart TVs e reprodutores de mídia**
+- 🔌 **Interruptores, tomadas e aspiradores robô**
 
-```
-HA_URL=http://homeassistant.local:8123
-HA_TOKEN=seu_token_aqui
-```
-
-### Ambiente
-
-```
-ENCRYPTION_KEY=chave_de_32_caracteres
-DB_PATH=./data/smarthome.sqlite
-```
+Ao conectar o Home Assistant à **MomAI**, todos esses dispositivos ficam imediatamente disponíveis para controle por voz ou texto.
 
 ---
 
-## Estrutura do Projeto
+## 📋 Requisitos
 
-```
-├── src/
-│   ├── index.js              ← Entry point, orquestrador
-│   ├── page.tsx              ← UI React (bundlada com esbuild)
-│   ├── config/constants.js   ← Constantes de configuração
-│   ├── auth/
-│   │   ├── tokenManager.js   ← Criptografia AES-256-GCM + persistência
-│   │   └── haAuth.js         ← Gerenciamento de credenciais HA
-│   ├── database/
-│   │   └── database.js       ← SQLite wrapper
-│   └── integrations/
-│       ├── provider.js       ← Classe base de provedor
-│       ├── providers/
-│       │   └── homeAssistant.js ← Provedor Home Assistant
-│       └── deviceManager.js  ← Registry/Facade de provedores
-├── manifest.json
-├── build.mjs
-├── package.json
-└── pnpm-lock.yaml
-```
+Para conectar a extensão ao seu ambiente, você precisará de apenas **duas informações** do seu servidor Home Assistant:
 
-## Banco de Dados
-
-| Tabela | Descrição |
-|--------|-----------|
-| `connections` | Conexões com provedores (url, token criptografado) |
-| `cached_entities` | Cache de dispositivos/entidades |
-| `rooms` | Cômodos mapeados |
-| `sessions` | (Compatibilidade) |
-
-## Comandos
-
-```bash
-pnpm install
-pnpm test
-pnpm build    # build.mjs → dist/page.js
-```
+1. **URL do Servidor**: O endereço IP local ou domínio do seu Home Assistant (ex.: `http://192.168.1.100:8123` ou `http://homeassistant.local:8123`).
+2. **Long-Lived Access Token** *(Token de Acesso de Longa Duração)*: Uma chave de autenticação gerada com segurança no painel do Home Assistant.
 
 ---
 
-## Provider Pattern: Google Home (futuro)
+## 🚀 Passo a Passo de Instalação e Configuração
 
-Para adicionar suporte a Google Home no futuro, crie `integrations/providers/googleHome.js`:
+Siga o guia prático abaixo para configurar e conectar o Home Assistant à extensão:
 
-```js
-const BaseProvider = require('../provider')
-class GoogleHomeProvider extends BaseProvider {
-  async connect() { /* OAuth 2.0 + HomeGraph API */ }
-  async listDevices() { /* GET /v1/devices:sync */ }
-  async turnOn(deviceId) { /* POST /v1/devices:reportStateAndNotification */ }
-  async turnOff(deviceId) { /* ... */ }
-}
-module.exports = GoogleHomeProvider
-```
+1. **Instale o Home Assistant**:
+   - Siga o guia oficial de instalação para a sua plataforma (Raspberry Pi, PC dedicado, Docker ou VM):
+   - 🔗 [Guia oficial de instalação do Home Assistant](https://www.home-assistant.io/installation/)
 
-Depois registre em `deviceManager.js`:
-```js
-const GoogleHomeProvider = require('./providers/googleHome')
-PROVIDER_REGISTRY['googlehome'] = GoogleHomeProvider
-```
+2. **Conclua a Configuração Inicial**:
+   - Acesse o Home Assistant pelo navegador e conclua o assistente de onboarding.
+
+3. **Adicione seus Dispositivos Inteligentes**:
+   - Integre suas lâmpadas, tomadas, TVs e sensores no Home Assistant seguindo a documentação oficial:
+   - 🔗 [Documentação oficial de integrações do Home Assistant](https://www.home-assistant.io/integrations/)
+
+4. **Acesse o Perfil de Usuário**:
+   - No painel do Home Assistant, clique no seu nome de usuário (canto inferior esquerdo) e vá em **Perfil → Segurança**.
+
+5. **Gere o Long-Lived Access Token**:
+   - Role até a seção **Long-Lived Access Tokens** (Tokens de Acesso de Longa Duração).
+   - Clique em **Create Token** *(Criar Token)*, informe um nome identificador (ex.: `MomAI`) e clique em **OK**.
+   - **Copie o código gerado**: Ele será exibido apenas uma vez!
+
+6. **Copie a URL do Servidor**:
+   - Copie o endereço completo que você utiliza para acessar o Home Assistant no navegador (ex.: `http://homeassistant.local:8123`).
+
+7. **Abra a Extensão MomAI Smart Home**:
+   - Na interface da **MomAI**, abra a aba da extensão **MomAI Smart Home**.
+   - Cole a **URL do Servidor** e o **Long-Lived Access Token** nos campos indicados.
+
+8. **Conectar**:
+   - Clique no botão **Conectar ao Home Assistant**.
+
+---
+
+## ⚡ Após a Conexão
+
+Assim que a conexão for estabelecida com sucesso, a **MomAI** detectará automaticamente todas as entidades e dispositivos cadastrados no seu servidor.
+
+### O que você pode fazer:
+
+- 💬 **Controle via Chat (Linguagem Natural)**:
+  - *"Ligue a luz da sala"*
+  - *"Mude a lâmpada do quarto para azul com 50% de brilho"*
+  - *"Ajuste o ar condicionado para 22 graus"*
+  - *"Desligue a TV da sala"*
+
+- 🪟 **Overlay Flutuante de Controle**:
+  - Ao pedir pelo chat ou acionar um dispositivo específico, a MomAI pode abrir uma janela flutuante dedicada com controle remoto de TV, roda de cores RGB para lâmpadas ou slider de temperatura.
+
+- 🎛️ **Painel Dedicado na Interface**:
+  - A extensão adiciona uma página completa à barra lateral da MomAI para visualizar o status em tempo real de todos os dispositivos, filtrar por cômodo (`Sala`, `Quarto`, etc.), acessar relógio, clima e acionar controles manuais.
