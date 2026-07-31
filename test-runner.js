@@ -56,6 +56,18 @@ async function runTests() {
   const afterDel = await tm.getConnection('test_ha')
   assert('removeConnection funciona', afterDel === null)
 
+  // Test 6: runtime.js tool export check
+  const runtime = require('./runtime')
+  assert('runtime.tools é array', Array.isArray(runtime.tools))
+  assert('runtime.tools contém set_light_color', runtime.tools.some(t => t.name === 'set_light_color'))
+  assert('runtime.tools contém control_tv_remote', runtime.tools.some(t => t.name === 'control_tv_remote'))
+  assert('runtime.tools contém control_climate', runtime.tools.some(t => t.name === 'control_climate'))
+  assert('runtime.tools contém call_ha_service', runtime.tools.some(t => t.name === 'call_ha_service'))
+
+  // Test 7: executeTool returns structured result
+  const unknownRes = await runtime.executeTool('unknown_tool', {})
+  assert('executeTool para ferramenta desconhecida retorna ok: false', unknownRes && unknownRes.ok === false)
+
   await db.close()
   console.log(`\n=== Resultado: ${passed} passaram, ${failed} falharam ===`)
   process.exit(failed > 0 ? 1 : 0)

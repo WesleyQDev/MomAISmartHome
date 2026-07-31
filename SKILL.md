@@ -33,13 +33,28 @@ intents:
   - climatização
   - fechadura
   - cortina
-  - persiana
-  - ventilador
-  - aspirador
-  - câmera
+  - cor
+  - cores
+  - vermelho
+  - azul
+  - verde
+  - amarelo
+  - roxo
+  - rosa
+  - tv
+  - televisão
+  - volume
+  - mute
+  - mudo
+  - canal
+  - controle remoto
+  - entrada
+  - hdmi
+  - netflix
+  - ar condicionado
 tools:
   - name: control_device
-    description: Liga, desliga ou ajusta um dispositivo inteligente
+    description: Liga, desliga ou ajusta um dispositivo inteligente (luzes, interruptores, etc)
     parameters:
       type: object
       required:
@@ -58,7 +73,99 @@ tools:
           description: Ação a executar
         brightness:
           type: number
-          description: Brilho (0-100) apenas para luzes
+          description: Brilho (0-100)
+        color:
+          type: string
+          description: Cor da lâmpada (nome da cor como "vermelho", "azul", "verde", "amarelo", "rosa", "quente", "frio" ou HEX "#FF0000")
+  - name: set_light_color
+    description: Altera a cor, brilho ou temperatura de cor de uma lâmpada inteligente ou fita LED
+    parameters:
+      type: object
+      required:
+        - device_name
+      properties:
+        device_name:
+          type: string
+          description: Nome da lâmpada
+        color:
+          type: string
+          description: Nome da cor (ex: "vermelho", "azul", "verde", "amarelo", "roxo", "rosa", "laranja", "branco", "quente", "frio") ou formato HEX
+        brightness:
+          type: number
+          description: Porcentagem de brilho (0-100)
+        color_temp:
+          type: number
+          description: Temperatura da cor em Kelvin (ex: 2700K a 6500K)
+  - name: control_tv_remote
+    description: Controle remoto de TV e Media Player: comandos de botão (power, volume, mute, canais), alternância de entrada (HDMI 1, Netflix) e reprodução
+    parameters:
+      type: object
+      required:
+        - device_name
+      properties:
+        device_name:
+          type: string
+          description: Nome da TV ou reprodutor de mídia
+        command:
+          type: string
+          description: Botão do controle remoto (power, volume_up, volume_down, mute, channel_up, channel_down, play, pause, home, back, select)
+        action:
+          type: string
+          enum:
+            - play
+            - pause
+            - stop
+            - next
+            - previous
+            - volume_up
+            - volume_down
+            - mute
+            - unmute
+            - source
+            - volume
+          description: Ação de mídia
+        value:
+          type: string
+          description: Valor para ação (volume 0-100 ou nome da entrada/fonte como "HDMI 1", "Netflix")
+  - name: control_climate
+    description: Ajusta temperatura e modo do ar condicionado ou termostato
+    parameters:
+      type: object
+      required:
+        - device_name
+      properties:
+        device_name:
+          type: string
+          description: Nome do ar condicionado
+        temperature:
+          type: number
+          description: Temperatura desejada em °C
+        hvac_mode:
+          type: string
+          enum:
+            - cool
+            - heat
+            - fan_only
+            - auto
+            - off
+          description: Modo de operação
+  - name: call_ha_service
+    description: Executa um serviço arbitrário do Home Assistant
+    parameters:
+      type: object
+      required:
+        - domain
+        - service
+      properties:
+        domain:
+          type: string
+          description: Domínio (ex: light, media_player, remote, climate)
+        service:
+          type: string
+          description: Serviço (ex: turn_on, send_command, select_source)
+        data:
+          type: object
+          description: Dados do serviço em JSON
   - name: list_devices
     description: Lista todos os dispositivos com seus estados atuais
     parameters:
@@ -79,4 +186,5 @@ tools:
           description: Nome do dispositivo
 ---
 
-Integração com Home Assistant e suporte a múltiplos provedores de automação residencial. Controle luzes, climatização, sensores, câmeras e muito mais.
+Integração completa com Home Assistant e suporte a múltiplos provedores de automação residencial. Controle cores de luzes, brilho, TV, controle remoto, volume, climatização, sensores e muito mais.
+

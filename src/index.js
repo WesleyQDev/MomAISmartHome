@@ -85,12 +85,24 @@ class MomAIHomeConnector {
     return this.devices.listDevices();
   }
 
-  async turnOnDevice(deviceId, connectionType) {
-    return this.devices.turnOn(deviceId, connectionType);
+  async turnOnDevice(deviceId, connectionType, params = {}) {
+    return this.devices.turnOn(deviceId, connectionType, params);
   }
 
-  async turnOffDevice(deviceId, connectionType) {
-    return this.devices.turnOff(deviceId, connectionType);
+  async turnOffDevice(deviceId, connectionType, params = {}) {
+    return this.devices.turnOff(deviceId, connectionType, params);
+  }
+
+  async sendRemoteCommand(deviceId, command, extra = {}, connectionType) {
+    return this.devices.sendRemoteCommand(deviceId, command, extra, connectionType);
+  }
+
+  async controlMedia(deviceId, action, value, connectionType) {
+    return this.devices.controlMedia(deviceId, action, value, connectionType);
+  }
+
+  async setClimate(deviceId, temperature, hvacMode, connectionType) {
+    return this.devices.setClimate(deviceId, temperature, hvacMode, connectionType);
   }
 
   async callService(domain, service, data) {

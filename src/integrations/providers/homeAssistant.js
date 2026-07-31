@@ -16,7 +16,67 @@ const HA_DOMAINS = {
   vacuum: { name: 'Vacuum', icon: 'vacuum', services: ['start', 'stop', 'return_to_base'] },
   scene: { name: 'Scene', icon: 'palette', services: ['turn_on'] },
   automation: { name: 'Automation', icon: 'autorenew', services: ['turn_on', 'turn_off', 'toggle'] },
-  alarm_control_panel: { name: 'Alarm', icon: 'security', services: ['alarm_arm_away', 'alarm_arm_home', 'alarm_disarm'] }
+  alarm_control_panel: { name: 'Alarm', icon: 'security', services: ['alarm_arm_away', 'alarm_arm_home', 'alarm_disarm'] },
+  sun: { name: 'Sun', icon: 'sun', services: [] },
+  weather: { name: 'Weather', icon: 'cloud-sun', services: [] },
+  remote: { name: 'Remote', icon: 'remote', services: ['turn_on', 'turn_off'] }
+}
+
+const EXCLUDED_DOMAINS = new Set([
+  'update', 'person', 'zone', 'todo', 'tts', 'stt', 'conversation',
+  'event', 'hacs', 'device_tracker', 'input_button', 'input_select',
+  'select', 'number', 'input_number', 'text', 'input_text', 'datetime',
+  'input_datetime', 'persistent_notification', 'button', 'diagnostics',
+  'system_health'
+])
+
+const COLOR_NAME_TO_RGB = {
+  vermelho: [255, 0, 0],
+  red: [255, 0, 0],
+  verde: [0, 255, 0],
+  green: [0, 255, 0],
+  azul: [0, 0, 255],
+  blue: [0, 0, 255],
+  amarelo: [255, 255, 0],
+  yellow: [255, 255, 0],
+  roxo: [128, 0, 128],
+  purple: [128, 0, 128],
+  violeta: [238, 130, 238],
+  lilas: [200, 160, 255],
+  rosa: [255, 192, 203],
+  pink: [255, 192, 203],
+  laranja: [255, 165, 0],
+  orange: [255, 165, 0],
+  ciano: [0, 255, 255],
+  cyan: [0, 255, 255],
+  turquesa: [64, 224, 208],
+  magenta: [255, 0, 255],
+  branco: [255, 255, 255],
+  white: [255, 255, 255],
+  quente: 'warm',
+  frio: 'cool'
+}
+
+function parseColor(color) {
+  if (!color || typeof color !== 'string') return null
+  const c = color.trim().toLowerCase()
+  if (COLOR_NAME_TO_RGB[c]) {
+    if (typeof COLOR_NAME_TO_RGB[c] === 'string') {
+      return { color_temp_kelvin: COLOR_NAME_TO_RGB[c] === 'warm' ? 2700 : 6500 }
+    }
+    return { rgb_color: COLOR_NAME_TO_RGB[c] }
+  }
+  const hexMatch = c.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i)
+  if (hexMatch) {
+    return {
+      rgb_color: [
+        parseInt(hexMatch[1], 16),
+        parseInt(hexMatch[2], 16),
+        parseInt(hexMatch[3], 16)
+      ]
+    }
+  }
+  return null
 }
 
 class HomeAssistantProvider extends BaseProvider {
@@ -129,7 +189,9 @@ class HomeAssistantProvider extends BaseProvider {
       const devices = states
         .filter((s) => {
           const domain = s.entity_id?.split('.')[0]
-          return HA_DOMAINS[domain] || s.attributes?.friendly_name
+          if (!domain || EXCLUDED_DOMAINS.has(domain)) return false
+          if (s.entity_id.startsWith('sensor.backup_')) return false
+          return Boolean(HA_DOMAINS[domain] || s.attributes?.friendly_name)
         })
         .map((s) => this._normalizeEntity(s))
 
@@ -144,14 +206,34 @@ class HomeAssistantProvider extends BaseProvider {
 
   async turnOn(deviceId, params = {}) {
     const device = this.cachedDevices.get(deviceId)
-    if (!device) return { success: false, error: 'Dispositivo não encontrado' }
-
     const domain = deviceId.split('.')[0]
+
+    const haPayload = { entity_id: deviceId }
+
+    if (domain === 'light') {
+      if (params.brightness !== undefined && params.brightness !== null) {
+        haPayload.brightness_pct = Math.max(0, Math.min(100, Number(params.brightness)))
+      }
+      if (params.color) {
+        const parsed = parseColor(params.color)
+        if (parsed) Object.assign(haPayload, parsed)
+      }
+      if (params.color_temp) {
+        haPayload.color_temp_kelvin = Number(params.color_temp)
+      }
+    }
+
+    for (const key of Object.keys(params)) {
+      if (!['brightness', 'color', 'color_temp'].includes(key)) {
+        haPayload[key] = params[key]
+      }
+    }
+
     try {
-      await this._post(`/api/services/${domain}/turn_on`, { entity_id: deviceId, ...params })
-      if (device.state) device.state.on = true
-      this.cachedDevices.set(deviceId, device)
-      return { success: true, deviceId, action: 'turnOn' }
+      await this._post(`/api/services/${domain}/turn_on`, haPayload)
+      if (device && device.state) device.state.on = true
+      if (device) this.cachedDevices.set(deviceId, device)
+      return { success: true, deviceId, action: 'turnOn', payload: haPayload }
     } catch (err) {
       return { success: false, error: err.message }
     }
@@ -159,17 +241,74 @@ class HomeAssistantProvider extends BaseProvider {
 
   async turnOff(deviceId, params = {}) {
     const device = this.cachedDevices.get(deviceId)
-    if (!device) return { success: false, error: 'Dispositivo não encontrado' }
-
     const domain = deviceId.split('.')[0]
     try {
       await this._post(`/api/services/${domain}/turn_off`, { entity_id: deviceId, ...params })
-      if (device.state) device.state.on = false
-      this.cachedDevices.set(deviceId, device)
+      if (device && device.state) device.state.on = false
+      if (device) this.cachedDevices.set(deviceId, device)
       return { success: true, deviceId, action: 'turnOff' }
     } catch (err) {
       return { success: false, error: err.message }
     }
+  }
+
+  async sendRemoteCommand(deviceId, command, extra = {}) {
+    const domain = deviceId.split('.')[0]
+    if (domain === 'remote') {
+      return this._post('/api/services/remote/send_command', { entity_id: deviceId, command, ...extra })
+    }
+    return this.controlMedia(deviceId, command, extra.value)
+  }
+
+  async controlMedia(deviceId, action, value) {
+    const domain = deviceId.split('.')[0]
+    const serviceMap = {
+      play: 'media_play',
+      pause: 'media_pause',
+      stop: 'media_stop',
+      next: 'media_next_track',
+      previous: 'media_previous_track',
+      volume_up: 'volume_up',
+      volume_down: 'volume_down'
+    }
+
+    if (action === 'volume' && value !== undefined) {
+      return this._post('/api/services/media_player/volume_set', {
+        entity_id: deviceId,
+        volume_level: Math.max(0, Math.min(1, Number(value) / 100))
+      })
+    }
+    if (action === 'mute') {
+      return this._post('/api/services/media_player/volume_mute', { entity_id: deviceId, is_volume_muted: true })
+    }
+    if (action === 'unmute') {
+      return this._post('/api/services/media_player/volume_mute', { entity_id: deviceId, is_volume_muted: false })
+    }
+    if (action === 'source' && value) {
+      return this._post('/api/services/media_player/select_source', { entity_id: deviceId, source: value })
+    }
+
+    const service = serviceMap[action] || action
+    return this._post(`/api/services/${domain}/${service}`, { entity_id: deviceId })
+  }
+
+  async setClimate(deviceId, temperature, hvacMode) {
+    const results = []
+    if (temperature !== undefined && temperature !== null) {
+      const res = await this._post('/api/services/climate/set_temperature', {
+        entity_id: deviceId,
+        temperature: Number(temperature)
+      })
+      results.push(res)
+    }
+    if (hvacMode) {
+      const res = await this._post('/api/services/climate/set_hvac_mode', {
+        entity_id: deviceId,
+        hvac_mode: hvacMode
+      })
+      results.push(res)
+    }
+    return { success: true, results }
   }
 
   async callService(domain, service, data = {}) {
@@ -196,8 +335,12 @@ class HomeAssistantProvider extends BaseProvider {
       provider: this.name,
       room: attrs.area_id || attrs.area || '',
       online: true,
-      state: { on: state.state === 'on' },
-      attributes: {}
+      state: { on: state.state === 'on' || state.state === 'home' || state.state === 'open' },
+      attributes: {
+        deviceClass: attrs.device_class || null,
+        unitOfMeasurement: attrs.unit_of_measurement || null,
+        haIcon: attrs.icon || null
+      }
     }
 
     if (domain === 'light') {
@@ -222,6 +365,24 @@ class HomeAssistantProvider extends BaseProvider {
       normalized.state.volume = attrs.volume_level || null
       normalized.state.source = attrs.source || null
       normalized.state.mediaTitle = attrs.media_title || null
+    } else if (domain === 'sun') {
+      normalized.state.rawState = state.state
+      normalized.state.elevation = attrs.elevation ?? null
+      normalized.state.azimuth = attrs.azimuth ?? null
+      normalized.state.rising = attrs.rising ?? false
+      normalized.attributes.next_rising = attrs.next_rising || null
+      normalized.attributes.next_setting = attrs.next_setting || null
+      normalized.attributes.next_dawn = attrs.next_dawn || null
+      normalized.attributes.next_dusk = attrs.next_dusk || null
+    } else if (domain === 'weather') {
+      normalized.state.rawState = state.state
+      normalized.state.temperature = attrs.temperature ?? null
+      normalized.state.temperatureUnit = attrs.temperature_unit || '°C'
+      normalized.state.humidity = attrs.humidity ?? null
+      normalized.state.pressure = attrs.pressure ?? null
+      normalized.state.pressureUnit = attrs.pressure_unit || 'hPa'
+      normalized.state.windSpeed = attrs.wind_speed ?? null
+      normalized.state.windSpeedUnit = attrs.wind_speed_unit || 'km/h'
     }
 
     return normalized

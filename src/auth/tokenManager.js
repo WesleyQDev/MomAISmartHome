@@ -103,7 +103,7 @@ class TokenManager {
 
     for (const e of entities) {
       await this.dbManager.run(
-        `INSERT INTO cached_entities (entity_id, connection_id, name, domain, type_name, room, state_json, attributes_json, online, last_seen)
+        `INSERT OR REPLACE INTO cached_entities (entity_id, connection_id, name, domain, type_name, room, state_json, attributes_json, online, last_seen)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
         [
           e.id,

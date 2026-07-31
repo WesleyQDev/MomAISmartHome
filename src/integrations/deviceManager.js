@@ -53,16 +53,43 @@ class DeviceManager {
     return allDevices;
   }
 
-  async turnOn(deviceId, providerType) {
+  async turnOn(deviceId, providerType, params = {}) {
     const provider = this._resolveProvider(deviceId, providerType);
     if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
-    return provider.turnOn(deviceId);
+    return provider.turnOn(deviceId, params);
   }
 
-  async turnOff(deviceId, providerType) {
+  async turnOff(deviceId, providerType, params = {}) {
     const provider = this._resolveProvider(deviceId, providerType);
     if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
-    return provider.turnOff(deviceId);
+    return provider.turnOff(deviceId, params);
+  }
+
+  async sendRemoteCommand(deviceId, command, extra = {}, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
+    if (typeof provider.sendRemoteCommand === 'function') {
+      return provider.sendRemoteCommand(deviceId, command, extra);
+    }
+    return { success: false, error: 'Provider não suporta comandos de controle remoto' };
+  }
+
+  async controlMedia(deviceId, action, value, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
+    if (typeof provider.controlMedia === 'function') {
+      return provider.controlMedia(deviceId, action, value);
+    }
+    return { success: false, error: 'Provider não suporta controle de mídia' };
+  }
+
+  async setClimate(deviceId, temperature, hvacMode, providerType) {
+    const provider = this._resolveProvider(deviceId, providerType);
+    if (!provider) return { success: false, error: 'Nenhum provider disponível para este dispositivo' };
+    if (typeof provider.setClimate === 'function') {
+      return provider.setClimate(deviceId, temperature, hvacMode);
+    }
+    return { success: false, error: 'Provider não suporta controle de climatização' };
   }
 
   async callService(domain, service, data = {}, providerType) {
