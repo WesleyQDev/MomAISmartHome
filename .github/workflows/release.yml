@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Build UI bundles
+        run: node build.mjs
+
+      - name: Verify runtime deps resolve
+        run: |
+          for dep in $(node -p "Object.keys(require('./package.json').dependencies||{}).join(' ')");
+          do test -d "node_modules/$dep" || { echo "Missing runtime dep: $dep"; exit 1; }; done
+
+      - name: Create release ZIP with node_modules
+        run: |
+          ZIP="MomAISmartHome-${GITHUB_REF_NAME}.zip"
+          zip -r "$ZIP" manifest.json SKILL.md runtime.js package.json README.md LICENSE icon.svg \
+            dist src node_modules -x "node_modules/.cache/*"
+          echo "asset=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.asset }}
