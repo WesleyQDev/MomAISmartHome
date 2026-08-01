@@ -117,7 +117,7 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
-      req.setTimeout(15000, () => req.destroy(new Error('Tempo limite ao consultar o Home Assistant')))
+      req.setTimeout(4000, () => req.destroy(new Error('Tempo limite ao consultar o Home Assistant')))
       req.on('error', reject)
       req.end()
     })
@@ -152,7 +152,7 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
-      req.setTimeout(15000, () => req.destroy(new Error('Tempo limite ao chamar o Home Assistant')))
+      req.setTimeout(4000, () => req.destroy(new Error('Tempo limite ao chamar o Home Assistant')))
       req.on('error', reject)
       req.write(postData)
       req.end()
