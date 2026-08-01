@@ -25,7 +25,7 @@
     "accent": "#a78bfa"
   },
   "storage": {
-    "description": "Armazena as conexÃµes e tokens do Home Assistant localmente de forma isolada.",
+    "description": "Armazena as conexões e tokens do Home Assistant localmente de forma isolada.",
     "locations": ["connections.json", "smarthome.sqlite"]
   }
 }
