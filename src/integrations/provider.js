@@ -1,5 +1,8 @@
-class BaseProvider {
+const { EventEmitter } = require('events')
+
+class BaseProvider extends EventEmitter {
   constructor(config = {}) {
+    super()
     this.config = config
     this.connected = false
     this.name = 'generic'
@@ -31,3 +34,4 @@ class BaseProvider {
 }
 
 module.exports = BaseProvider
+

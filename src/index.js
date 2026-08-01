@@ -1,4 +1,5 @@
 const path = require('path');
+const { EventEmitter } = require('events');
 
 try {
   require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -9,12 +10,19 @@ const TokenManager = require('./auth/tokenManager');
 const HomeAssistantAuth = require('./auth/haAuth');
 const DeviceManager = require('./integrations/deviceManager');
 
-class MomAIHomeConnector {
+class MomAIHomeConnector extends EventEmitter {
   constructor(options = {}) {
+    super();
     this.dbManager = new DatabaseManager(options.dbPath);
     this.tokenManager = new TokenManager(this.dbManager);
     this.auth = new HomeAssistantAuth(options.authOptions);
     this.devices = new DeviceManager();
+
+    if (typeof this.devices.on === 'function') {
+      this.devices.on('state_changed', (data) => {
+        this.emit('state_changed', data);
+      });
+    }
 
     this.isConnected = false;
     this.connections = [];
@@ -204,6 +212,18 @@ class MomAIHomeConnector {
     }
 
     return this.devices.listDevices();
+  }
+
+  async syncDevices(connectionId) {
+    const devices = await this.getDevices(connectionId);
+    if (connectionId && devices.length > 0) {
+      await this.tokenManager.cacheEntities(connectionId, devices).catch(() => {});
+    } else if (this.connections.length > 0 && devices.length > 0) {
+      for (const conn of this.connections) {
+        await this.tokenManager.cacheEntities(conn.id, devices).catch(() => {});
+      }
+    }
+    return devices;
   }
 
   async getDeviceState(deviceId, connectionType) {

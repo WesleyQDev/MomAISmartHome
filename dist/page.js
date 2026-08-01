@@ -45,6 +45,7 @@ var SvgSignal = ({ size = 20, color = "currentColor", className = "", style }) =
 var SvgSunrise = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M12 2v6" }), /* @__PURE__ */ React.createElement("path", { d: "M4.93 10.93l1.41 1.41" }), /* @__PURE__ */ React.createElement("path", { d: "M17.66 12.34l1.41-1.41" }), /* @__PURE__ */ React.createElement("path", { d: "M2 18h20" }), /* @__PURE__ */ React.createElement("path", { d: "M20 18a8 8 0 1 0-16 0" }));
 var SvgSunset = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M12 10v6" }), /* @__PURE__ */ React.createElement("path", { d: "M12 16l-3-3" }), /* @__PURE__ */ React.createElement("path", { d: "M12 16l3-3" }), /* @__PURE__ */ React.createElement("path", { d: "M2 18h20" }), /* @__PURE__ */ React.createElement("path", { d: "M20 18a8 8 0 1 0-16 0" }));
 var SvgPlus = ({ size = 18, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("line", { x1: "12", y1: "5", x2: "12", y2: "19" }), /* @__PURE__ */ React.createElement("line", { x1: "5", y1: "12", x2: "19", y2: "12" }));
+var SvgRefresh = ({ size = 18, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("polyline", { points: "23 4 23 10 17 10" }), /* @__PURE__ */ React.createElement("path", { d: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10" }));
 var SvgLogout = ({ size = 18, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" }), /* @__PURE__ */ React.createElement("polyline", { points: "16 17 21 12 16 7" }), /* @__PURE__ */ React.createElement("line", { x1: "21", y1: "12", x2: "9", y2: "12" }));
 var SvgPlay = ({ size = 18, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: color, stroke: "none", className, style }, /* @__PURE__ */ React.createElement("polygon", { points: "5 3 19 12 5 21 5 3" }));
 var SvgPause = ({ size = 18, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: color, stroke: "none", className, style }, /* @__PURE__ */ React.createElement("rect", { x: "6", y: "4", width: "4", height: "16", rx: "1" }), /* @__PURE__ */ React.createElement("rect", { x: "14", y: "4", width: "4", height: "16", rx: "1" }));
@@ -261,12 +262,16 @@ function DeviceControlCardContent({
   callServiceApi,
   isOverlay = false
 }) {
-  const volumeDevice = device.domain === "media_player" ? device : allDevices.find((candidate) => candidate.domain === "media_player" && candidate.name === device.name) || device;
-  const [brightness, setBrightnessState] = useState(device.state?.brightness ?? 94);
+  const [currentDevice, setCurrentDevice] = useState(device);
+  React2.useEffect(() => {
+    setCurrentDevice(device);
+  }, [device]);
+  const volumeDevice = currentDevice.domain === "media_player" ? currentDevice : allDevices.find((candidate) => candidate.domain === "media_player" && candidate.name === currentDevice.name) || currentDevice;
+  const [brightness, setBrightnessState] = useState(currentDevice.state?.brightness ?? 94);
   const [tempPct, setTempPctState] = useState(85);
   const [activeTab, setActiveTab] = useState("brightness");
   const [selectedRgbHex, setSelectedRgbHex] = useState("#f97316");
-  const [isOn, setIsOn] = useState(Boolean(device.state?.on));
+  const [isOn, setIsOn] = useState(Boolean(currentDevice.state?.on));
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [showInputSelector, setShowInputSelector] = useState(false);
@@ -276,16 +281,79 @@ function DeviceControlCardContent({
   const [activeVolumeButton, setActiveVolumeButton] = useState(null);
   const volumeFeedbackTimerRef = useRef(null);
   React2.useEffect(() => {
-    if (device.state?.on !== void 0) {
-      setIsOn(Boolean(device.state.on));
+    if (currentDevice.state?.on !== void 0) {
+      setIsOn(Boolean(currentDevice.state.on));
     }
-  }, [device.state?.on]);
+    if (currentDevice.state?.brightness != null) {
+      setBrightnessState(currentDevice.state.brightness);
+    }
+    if (currentDevice.state?.hexColor) {
+      setSelectedRgbHex(currentDevice.state.hexColor);
+    } else if (Array.isArray(currentDevice.state?.rgbColor) && currentDevice.state.rgbColor.length === 3) {
+      const rgb = currentDevice.state.rgbColor;
+      const hex = `#${rgb[0].toString(16).padStart(2, "0")}${rgb[1].toString(16).padStart(2, "0")}${rgb[2].toString(16).padStart(2, "0")}`;
+      setSelectedRgbHex(hex);
+    }
+    if (currentDevice.state?.colorTempKelvin) {
+      const pct = Math.max(0, Math.min(100, Math.round((6500 - currentDevice.state.colorTempKelvin) / (6500 - 2e3) * 100)));
+      setTempPctState(pct);
+    }
+    if (currentDevice.domain === "media_player") {
+      if (currentDevice.state?.isPlaying !== void 0) {
+        setIsPlaying(currentDevice.state.isPlaying);
+      } else if (currentDevice.state?.rawState) {
+        setIsPlaying(currentDevice.state.rawState === "playing");
+      }
+      if (currentDevice.state?.isMuted !== void 0) {
+        setIsMuted(Boolean(currentDevice.state.isMuted));
+      }
+    }
+  }, [currentDevice]);
   React2.useEffect(() => {
     if (volumeDevice.state?.volume === null || volumeDevice.state?.volume === void 0) return;
     const nextVolumePercent = volumeToPercent(volumeDevice.state.volume);
     volumePercentRef.current = nextVolumePercent;
     setVolumePercent(nextVolumePercent);
   }, [volumeDevice.state?.volume]);
+  React2.useEffect(() => {
+    let eventSource = null;
+    try {
+      const sseUrl = `${getApiBaseUrl()}/extensions/events`;
+      eventSource = new EventSource(sseUrl);
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "extension_event" && payload.eventType === "state_changed") {
+            const updatedDevice = payload.data?.device;
+            if (updatedDevice) {
+              const isMatchCurrent = updatedDevice.id === currentDevice.id || updatedDevice.name.toLowerCase().trim() === currentDevice.name.toLowerCase().trim();
+              const isMatchVolume = updatedDevice.id === volumeDevice.id || updatedDevice.name.toLowerCase().trim() === volumeDevice.name.toLowerCase().trim();
+              if (isMatchCurrent) {
+                setCurrentDevice((prev) => ({
+                  ...prev,
+                  ...updatedDevice,
+                  state: { ...prev.state, ...updatedDevice.state },
+                  attributes: { ...prev.attributes, ...updatedDevice.attributes }
+                }));
+              }
+              if (isMatchVolume && updatedDevice.state?.volume !== void 0 && updatedDevice.state.volume !== null) {
+                const nextVol = volumeToPercent(updatedDevice.state.volume);
+                setVolumePercent(nextVol);
+                volumePercentRef.current = nextVol;
+              }
+            }
+          }
+        } catch (err) {
+        }
+      };
+    } catch (err) {
+    }
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [currentDevice.id, currentDevice.name, volumeDevice.id, volumeDevice.name]);
   React2.useEffect(() => {
     return () => {
       if (volumeFeedbackTimerRef.current) {
@@ -568,7 +636,7 @@ function DeviceControlCardContent({
           className: "sh-pill-slider-fill",
           style: {
             height: `${tempPct}%`,
-            background: "linear-gradient(to top, #ff9e3b, #60a5fa)"
+            background: "linear-gradient(to top, #ffffff 0%, #ffdfb8 40%, #ff8c00 100%)"
           }
         },
         /* @__PURE__ */ React2.createElement("div", { className: "sh-pill-handle" })
@@ -610,6 +678,15 @@ var SMART_HOME_CSS = `
     0% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
     70% { transform: scale(1.1); opacity: 0.8; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
     100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  }
+
+  @keyframes shSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .sh-spin {
+    animation: shSpin 0.8s linear infinite;
   }
 
   html, body {
@@ -1158,6 +1235,7 @@ async function sendCommand(toolName, args = {}) {
 var api = {
   connectToHomeAssistant: (url, token, name) => sendCommand("connectToHomeAssistant", { url, token, name }),
   getDevices: (connectionId) => sendCommand("getDevices", { connectionId }).then((r) => r.devices || []),
+  syncDevices: (connectionId) => sendCommand("syncDevices", { connectionId }).then((r) => r.devices || []),
   turnOnDevice: (deviceId, providerType, params) => sendCommand("turnOnDevice", { deviceId, providerType, params }),
   turnOffDevice: (deviceId, providerType, params) => sendCommand("turnOffDevice", { deviceId, providerType, params }),
   setClimate: (deviceId, temperature, hvacMode, providerType) => sendCommand("setClimate", { deviceId, temperature, hvacMode, providerType }),
@@ -1302,9 +1380,91 @@ function SmartHomePage() {
   const [haToken, setHaToken] = useState2("");
   const [connectError, setConnectError] = useState2(null);
   const [connecting, setConnecting] = useState2(false);
+  const [isSyncing, setIsSyncing] = useState2(false);
   useEffect(() => {
     loadStatus();
   }, []);
+  useEffect(() => {
+    if (!isConnected) return;
+    const interval = setInterval(async () => {
+      try {
+        const devs = await api.getDevices();
+        if (Array.isArray(devs)) {
+          const deduplicated = deduplicateDevicesByName(devs);
+          setDevices(deduplicated);
+        }
+      } catch (err) {
+        console.warn("[SmartHome] Erro na sincroniza\xE7\xE3o peri\xF3dica:", err);
+      }
+    }, 1e4);
+    return () => clearInterval(interval);
+  }, [isConnected]);
+  useEffect(() => {
+    if (!isConnected) return;
+    let eventSource = null;
+    try {
+      const sseUrl = `${getApiBase()}/extensions/events`;
+      eventSource = new EventSource(sseUrl);
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "extension_event" && payload.eventType === "state_changed") {
+            const updatedDevice = payload.data?.device;
+            if (updatedDevice && updatedDevice.id) {
+              setDevices((prevDevices) => {
+                const index = prevDevices.findIndex((d) => d.id === updatedDevice.id);
+                if (index >= 0) {
+                  const updated = [...prevDevices];
+                  updated[index] = {
+                    ...updated[index],
+                    ...updatedDevice,
+                    state: { ...updated[index].state, ...updatedDevice.state },
+                    attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
+                  };
+                  return updated;
+                } else {
+                  return deduplicateDevicesByName([...prevDevices, updatedDevice]);
+                }
+              });
+              setSelectedDevice((prevSelected) => {
+                if (prevSelected && prevSelected.id === updatedDevice.id) {
+                  return {
+                    ...prevSelected,
+                    ...updatedDevice,
+                    state: { ...prevSelected.state, ...updatedDevice.state },
+                    attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
+                  };
+                }
+                return prevSelected;
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("[SmartHome] Erro ao processar evento SSE:", err);
+        }
+      };
+    } catch (err) {
+      console.warn("[SmartHome] Erro ao conectar ao EventSource SSE:", err);
+    }
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [isConnected]);
+  const handleResync = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const devs = await api.syncDevices();
+      const deduplicated = deduplicateDevicesByName(devs);
+      setDevices(deduplicated);
+    } catch (err) {
+      console.warn("[SmartHome] Erro na resincroniza\xE7\xE3o manual:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const fetchLastConnection = async () => {
     try {
       const last = await api.getLastConnection();
@@ -1455,7 +1615,23 @@ function SmartHomePage() {
       value: haToken,
       onChange: (e) => setHaToken(e.target.value)
     }
-  )), connectError && /* @__PURE__ */ React4.createElement("div", { style: { background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "10px", padding: "8px 12px", color: "#fca5a5", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React4.createElement(SvgAlert, { size: 15, color: "#ef4444" }), /* @__PURE__ */ React4.createElement("span", null, connectError)), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn-primary", style: { width: "100%", padding: "12px 18px", fontSize: "13.5px", marginTop: "4px" }, type: "submit", disabled: connecting }, connecting ? /* @__PURE__ */ React4.createElement("span", null, "Conectando...") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgPlus, { size: 15, color: "#ffffff" }), /* @__PURE__ */ React4.createElement("span", null, "Conectar ao Home Assistant")))))) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "sh-header" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-header-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-logo-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 22, color: "#a78bfa" })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h1", { className: "sh-title" }, "MomAI Smart Home"))), /* @__PURE__ */ React4.createElement("div", { className: "sh-actions" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-badge" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-dot" }), /* @__PURE__ */ React4.createElement("span", null, "Home Assistant")), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn sh-btn-danger", onClick: handleDisconnectAll }, /* @__PURE__ */ React4.createElement(SvgLogout, { size: 15 }), "Desconectar"))), devices.length > 0 && /* @__PURE__ */ React4.createElement("div", { className: "sh-chips" }, /* @__PURE__ */ React4.createElement(
+  )), connectError && /* @__PURE__ */ React4.createElement("div", { style: { background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "10px", padding: "8px 12px", color: "#fca5a5", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React4.createElement(SvgAlert, { size: 15, color: "#ef4444" }), /* @__PURE__ */ React4.createElement("span", null, connectError)), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn-primary", style: { width: "100%", padding: "12px 18px", fontSize: "13.5px", marginTop: "4px" }, type: "submit", disabled: connecting }, connecting ? /* @__PURE__ */ React4.createElement("span", null, "Conectando...") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgPlus, { size: 15, color: "#ffffff" }), /* @__PURE__ */ React4.createElement("span", null, "Conectar ao Home Assistant")))))) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "sh-header" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-header-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-logo-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 22, color: "#a78bfa" })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h1", { className: "sh-title" }, "MomAI Smart Home"))), /* @__PURE__ */ React4.createElement("div", { className: "sh-actions" }, /* @__PURE__ */ React4.createElement(
+    "button",
+    {
+      className: "sh-btn",
+      onClick: handleResync,
+      disabled: isSyncing,
+      title: "Resincronizar dispositivos do Home Assistant",
+      style: {
+        background: "rgba(167, 139, 250, 0.15)",
+        color: "#c084fc",
+        border: "1px solid rgba(167, 139, 250, 0.25)",
+        cursor: isSyncing ? "wait" : "pointer"
+      }
+    },
+    /* @__PURE__ */ React4.createElement(SvgRefresh, { size: 15, className: isSyncing ? "sh-spin" : "" }),
+    /* @__PURE__ */ React4.createElement("span", null, isSyncing ? "Sincronizando..." : "Resincronizar")
+  ), /* @__PURE__ */ React4.createElement("div", { className: "sh-badge" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-dot" }), /* @__PURE__ */ React4.createElement("span", null, "Home Assistant")), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn sh-btn-danger", onClick: handleDisconnectAll }, /* @__PURE__ */ React4.createElement(SvgLogout, { size: 15 }), "Desconectar"))), devices.length > 0 && /* @__PURE__ */ React4.createElement("div", { className: "sh-chips" }, /* @__PURE__ */ React4.createElement(
     "button",
     {
       className: `sh-chip ${activeFilter === "controllable" ? "active" : ""}`,

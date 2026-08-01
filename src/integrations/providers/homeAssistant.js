@@ -2,6 +2,15 @@ const https = require('https')
 const http = require('http')
 const BaseProvider = require('../provider')
 
+let WebSocket
+try {
+  WebSocket = require('ws')
+} catch (e) {
+  if (typeof globalThis.WebSocket !== 'undefined') {
+    WebSocket = globalThis.WebSocket
+  }
+}
+
 const HA_DOMAINS = {
   light: { name: 'Light', icon: 'lightbulb', services: ['turn_on', 'turn_off', 'toggle'] },
   switch: { name: 'Switch', icon: 'switch', services: ['turn_on', 'turn_off', 'toggle'] },
@@ -86,6 +95,144 @@ class HomeAssistantProvider extends BaseProvider {
     this.url = config.url || process.env.HA_URL || 'http://homeassistant.local:8123'
     this.token = config.token || process.env.HA_TOKEN || ''
     this.cachedDevices = new Map()
+
+    this.ws = null
+    this.wsConnected = false
+    this.wsReconnectTimer = null
+    this.wsMessageId = 0
+  }
+
+  _getWsUrl() {
+    try {
+      const parsed = new URL(this.url)
+      const protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${protocol}//${parsed.host}/api/websocket`
+    } catch {
+      return null
+    }
+  }
+
+  _connectWebSocket() {
+    if (!WebSocket) {
+      console.warn('[HAProvider] WebSocket não disponível no ambiente.')
+      return
+    }
+
+    const wsUrl = this._getWsUrl()
+    if (!wsUrl || !this.token) return
+
+    this._closeWebSocket(false)
+
+    try {
+      const ws = new WebSocket(wsUrl)
+      this.ws = ws
+
+      ws.on('error', (err) => {
+        const msg = err?.message || String(err || '')
+        if (!msg.includes('closed before the connection was established')) {
+          console.warn('[HAProvider] Erro no WebSocket:', msg)
+        }
+      })
+
+      ws.on('open', () => {
+        // Aguarda mensagem 'auth_required' enviada pelo servidor HA
+      })
+
+      ws.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString())
+          this._handleWsMessage(msg)
+        } catch (err) {
+          console.warn('[HAProvider] Erro ao processar mensagem do WebSocket:', err.message)
+        }
+      })
+
+      ws.on('close', () => {
+        this.wsConnected = false
+        if (this.connected) {
+          this._scheduleWsReconnect()
+        }
+      })
+    } catch (err) {
+      console.warn('[HAProvider] Erro ao instanciar WebSocket:', err.message)
+      this._scheduleWsReconnect()
+    }
+  }
+
+  _handleWsMessage(msg) {
+    if (!msg || typeof msg !== 'object') return
+
+    if (msg.type === 'auth_required') {
+      if (this.ws && (this.ws.readyState === 1 || (WebSocket && this.ws.readyState === WebSocket.OPEN))) {
+        this.ws.send(JSON.stringify({ type: 'auth', access_token: this.token }))
+      }
+      return
+    }
+
+    if (msg.type === 'auth_ok') {
+      this.wsConnected = true
+      const subId = ++this.wsMessageId
+      if (this.ws && (this.ws.readyState === 1 || (WebSocket && this.ws.readyState === WebSocket.OPEN))) {
+        this.ws.send(JSON.stringify({
+          id: subId,
+          type: 'subscribe_events',
+          event_type: 'state_changed'
+        }))
+      }
+      return
+    }
+
+    if (msg.type === 'auth_invalid') {
+      console.warn('[HAProvider] Autenticação WebSocket recusada pelo Home Assistant:', msg.message)
+      this.wsConnected = false
+      return
+    }
+
+    if (msg.type === 'event' && msg.event && msg.event.event_type === 'state_changed') {
+      const eventData = msg.event.data
+      if (eventData && eventData.new_state && eventData.entity_id) {
+        const domain = eventData.entity_id.split('.')[0]
+        if (EXCLUDED_DOMAINS.has(domain) || eventData.entity_id.startsWith('sensor.backup_')) {
+          return
+        }
+        const normalized = this._normalizeEntity(eventData.new_state)
+        this.cachedDevices.set(normalized.id, normalized)
+        this.emit('state_changed', { device: normalized, entityId: normalized.id })
+      }
+    }
+  }
+
+  _scheduleWsReconnect() {
+    if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer)
+    if (!this.connected) return
+
+    this.wsReconnectTimer = setTimeout(() => {
+      if (this.connected) {
+        this._connectWebSocket()
+      }
+    }, 5000)
+  }
+
+  _closeWebSocket(resetConnected = true) {
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer)
+      this.wsReconnectTimer = null
+    }
+    if (this.ws) {
+      const socket = this.ws
+      this.ws = null
+      try {
+        socket.on('error', () => {})
+        if (typeof socket.terminate === 'function') {
+          socket.terminate()
+        } else if (typeof socket.close === 'function') {
+          socket.close()
+        }
+      } catch {}
+    }
+    if (resetConnected) {
+      this.wsConnected = false
+    }
   }
 
   _get(urlPath) {
@@ -166,6 +313,7 @@ class HomeAssistantProvider extends BaseProvider {
     try {
       const config = await this._get('/api/config')
       this.connected = true
+      this._connectWebSocket()
       return {
         success: true,
         message: `Conectado ao Home Assistant (${config.version || 'desconhecido'})`,
@@ -181,6 +329,7 @@ class HomeAssistantProvider extends BaseProvider {
 
   async disconnect() {
     this.connected = false
+    this._closeWebSocket()
     this.cachedDevices.clear()
     return { success: true, message: 'Desconectado do Home Assistant' }
   }
@@ -261,7 +410,10 @@ class HomeAssistantProvider extends BaseProvider {
         if (domain === 'cover') device.state.isOpen = true
         if (domain === 'lock') device.state.locked = false
       }
-      if (device) this.cachedDevices.set(deviceId, device)
+      if (device) {
+        this.cachedDevices.set(deviceId, device)
+        this.emit('state_changed', { device, entityId: deviceId })
+      }
       return { success: true, deviceId, action: 'turnOn', payload: haPayload }
     } catch (err) {
       return { success: false, error: err.message }
@@ -284,7 +436,10 @@ class HomeAssistantProvider extends BaseProvider {
         if (domain === 'cover') device.state.isOpen = false
         if (domain === 'lock') device.state.locked = true
       }
-      if (device) this.cachedDevices.set(deviceId, device)
+      if (device) {
+        this.cachedDevices.set(deviceId, device)
+        this.emit('state_changed', { device, entityId: deviceId })
+      }
       return { success: true, deviceId, action: 'turnOff' }
     } catch (err) {
       return { success: false, error: err.message }
@@ -421,12 +576,25 @@ class HomeAssistantProvider extends BaseProvider {
     }
 
     if (domain === 'light') {
-      normalized.state.brightness = attrs.brightness ? Math.round((attrs.brightness / 255) * 100) : null
+      normalized.state.brightness = (attrs.brightness !== undefined && attrs.brightness !== null)
+        ? Math.round((attrs.brightness / 255) * 100)
+        : null
       normalized.state.colorTemp = attrs.color_temp || null
+      normalized.state.colorTempKelvin = attrs.color_temp_kelvin || (attrs.color_temp ? Math.round(1000000 / attrs.color_temp) : null)
+
+      let rgb = null
+      if (Array.isArray(attrs.rgb_color) && attrs.rgb_color.length === 3) {
+        rgb = attrs.rgb_color
+      }
+      normalized.state.rgbColor = rgb
+      normalized.state.hexColor = rgb
+        ? `#${rgb[0].toString(16).padStart(2, '0')}${rgb[1].toString(16).padStart(2, '0')}${rgb[2].toString(16).padStart(2, '0')}`
+        : null
+
       normalized.attributes.supported = domainInfo.services
     } else if (domain === 'climate') {
-      normalized.state.temperature = attrs.current_temperature || null
-      normalized.state.targetTemperature = attrs.temperature || null
+      normalized.state.temperature = attrs.current_temperature ?? null
+      normalized.state.targetTemperature = attrs.temperature ?? null
       normalized.state.hvacMode = state.state
       normalized.state.hvacModes = attrs.hvac_modes || []
       normalized.attributes.supported = domainInfo.services
@@ -439,9 +607,16 @@ class HomeAssistantProvider extends BaseProvider {
     } else if (domain === 'lock') {
       normalized.state.locked = rawState === 'locked'
     } else if (domain === 'media_player') {
-      normalized.state.volume = attrs.volume_level ?? null
+      normalized.state.volume = (attrs.volume_level !== undefined && attrs.volume_level !== null)
+        ? attrs.volume_level
+        : null
+      normalized.state.isMuted = Boolean(attrs.is_volume_muted)
       normalized.state.source = attrs.source || null
-      normalized.state.mediaTitle = attrs.media_title || null
+      normalized.state.mediaTitle = attrs.media_title || attrs.media_content_id || null
+      normalized.state.mediaArtist = attrs.media_artist || null
+      normalized.state.isPlaying = rawState === 'playing'
+      normalized.attributes.source_list = attrs.source_list || []
+      normalized.attributes.supported = domainInfo.services
     } else if (domain === 'sun') {
       normalized.state.rawState = state.state
       normalized.state.elevation = attrs.elevation ?? null

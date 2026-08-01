@@ -156,6 +156,7 @@ const CONTROLLABLE_DOMAINS = [
 interface BackendApi {
   connectToHomeAssistant(url: string, token: string, name?: string): Promise<any>
   getDevices(connectionId?: string): Promise<Device[]>
+  syncDevices(connectionId?: string): Promise<Device[]>
   turnOnDevice(deviceId: string, providerType?: string, params?: Record<string, unknown>): Promise<any>
   turnOffDevice(deviceId: string, providerType?: string, params?: Record<string, unknown>): Promise<any>
   setClimate(deviceId: string, temperature?: number, hvacMode?: string, providerType?: string): Promise<any>
@@ -196,6 +197,7 @@ async function sendCommand(toolName: string, args: any = {}): Promise<any> {
 const api: BackendApi = {
   connectToHomeAssistant: (url, token, name) => sendCommand('connectToHomeAssistant', { url, token, name }),
   getDevices: (connectionId?) => sendCommand('getDevices', { connectionId }).then((r: any) => r.devices || []),
+  syncDevices: (connectionId?) => sendCommand('syncDevices', { connectionId }).then((r: any) => r.devices || []),
   turnOnDevice: (deviceId, providerType?, params?) => sendCommand('turnOnDevice', { deviceId, providerType, params }),
   turnOffDevice: (deviceId, providerType?, params?) => sendCommand('turnOffDevice', { deviceId, providerType, params }),
   setClimate: (deviceId, temperature, hvacMode, providerType?) => sendCommand('setClimate', { deviceId, temperature, hvacMode, providerType }),
@@ -444,10 +446,104 @@ export default function SmartHomePage() {
   const [haToken, setHaToken] = useState('')
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
 
   useEffect(() => {
     loadStatus()
   }, [])
+
+  // Auto-sync every 10s to discover new devices added in Home Assistant
+  useEffect(() => {
+    if (!isConnected) return
+
+    const interval = setInterval(async () => {
+      try {
+        const devs = await api.getDevices()
+        if (Array.isArray(devs)) {
+          const deduplicated = deduplicateDevicesByName(devs)
+          setDevices(deduplicated)
+        }
+      } catch (err) {
+        console.warn('[SmartHome] Erro na sincronização periódica:', err)
+      }
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [isConnected])
+
+  // Listen for real-time state_changed events via SSE stream
+  useEffect(() => {
+    if (!isConnected) return
+
+    let eventSource: EventSource | null = null
+
+    try {
+      const sseUrl = `${getApiBase()}/extensions/events`
+      eventSource = new EventSource(sseUrl)
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload.type === 'extension_event' && payload.eventType === 'state_changed') {
+            const updatedDevice: Device = payload.data?.device
+            if (updatedDevice && updatedDevice.id) {
+              setDevices((prevDevices) => {
+                const index = prevDevices.findIndex((d) => d.id === updatedDevice.id)
+                if (index >= 0) {
+                  const updated = [...prevDevices]
+                  updated[index] = {
+                    ...updated[index],
+                    ...updatedDevice,
+                    state: { ...updated[index].state, ...updatedDevice.state },
+                    attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
+                  }
+                  return updated
+                } else {
+                  return deduplicateDevicesByName([...prevDevices, updatedDevice])
+                }
+              })
+
+              setSelectedDevice((prevSelected) => {
+                if (prevSelected && prevSelected.id === updatedDevice.id) {
+                  return {
+                    ...prevSelected,
+                    ...updatedDevice,
+                    state: { ...prevSelected.state, ...updatedDevice.state },
+                    attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
+                  }
+                }
+                return prevSelected
+              })
+            }
+          }
+        } catch (err) {
+          console.warn('[SmartHome] Erro ao processar evento SSE:', err)
+        }
+      }
+    } catch (err) {
+      console.warn('[SmartHome] Erro ao conectar ao EventSource SSE:', err)
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+    }
+  }, [isConnected])
+
+  const handleResync = async () => {
+    if (isSyncing) return
+    setIsSyncing(true)
+    try {
+      const devs = await api.syncDevices()
+      const deduplicated = deduplicateDevicesByName(devs)
+      setDevices(deduplicated)
+    } catch (err) {
+      console.warn('[SmartHome] Erro na resincronização manual:', err)
+    } finally {
+      setIsSyncing(false)
+    }
+  }
 
   const fetchLastConnection = async () => {
     try {
@@ -724,6 +820,22 @@ export default function SmartHomePage() {
             </div>
 
             <div className="sh-actions">
+              <button
+                className="sh-btn"
+                onClick={handleResync}
+                disabled={isSyncing}
+                title="Resincronizar dispositivos do Home Assistant"
+                style={{
+                  background: 'rgba(167, 139, 250, 0.15)',
+                  color: '#c084fc',
+                  border: '1px solid rgba(167, 139, 250, 0.25)',
+                  cursor: isSyncing ? 'wait' : 'pointer'
+                }}
+              >
+                <SvgRefresh size={15} className={isSyncing ? 'sh-spin' : ''} />
+                <span>{isSyncing ? 'Sincronizando...' : 'Resincronizar'}</span>
+              </button>
+
               <div className="sh-badge">
                 <span className="sh-dot" />
                 <span>Home Assistant</span>

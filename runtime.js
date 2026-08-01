@@ -22,10 +22,33 @@ async function init() {
   }
 }
 
+if (typeof connector.on === 'function') {
+  connector.on('state_changed', (data) => {
+    if (data && data.device) {
+      const dispatchEvent = (typeof momai !== 'undefined' && momai && typeof momai.sendEvent === 'function')
+        ? (type, payload) => momai.sendEvent(type, payload)
+        : (type, payload) => {
+            if (typeof process.send === 'function') {
+              process.send({ type: 'event', eventType: type, data: payload })
+            }
+          }
+
+      try {
+        dispatchEvent('state_changed', {
+          device: data.device,
+          entityId: data.entityId || data.device.id
+        })
+      } catch (err) {
+        console.warn('[runtime] Erro ao transmitir evento state_changed:', err)
+      }
+    }
+  })
+}
+
 async function refreshDeviceCache() {
   try {
-    await connector.init()
-    const devices = await connector.getDevices()
+    await connector.ensureConnected().catch(() => {})
+    const devices = (typeof connector.syncDevices === 'function') ? await connector.syncDevices() : await connector.getDevices()
     const names = devices.map((d) => `${d.name} (${d.id})`)
     const byRoom = {}
     for (const d of devices) {
@@ -34,8 +57,18 @@ async function refreshDeviceCache() {
       byRoom[room].push(d.name)
     }
     deviceCache = { names, byRoom }
-  } catch {}
+    return devices
+  } catch {
+    return []
+  }
 }
+
+// Background sync interval (every 15s) to discover new devices automatically
+setInterval(async () => {
+  if (ready) {
+    await refreshDeviceCache().catch(() => {})
+  }
+}, 15000)
 
 const tools = module.exports.tools = [
   {
@@ -512,6 +545,12 @@ async function executeTool(toolName, args, momai) {
 
     case 'getDevices': {
       const devices = await connector.getDevices(args.connectionId)
+      return { ok: true, devices }
+    }
+
+    case 'syncDevices': {
+      const devices = (typeof connector.syncDevices === 'function') ? await connector.syncDevices(args.connectionId) : await connector.getDevices(args.connectionId)
+      await refreshDeviceCache()
       return { ok: true, devices }
     }
 

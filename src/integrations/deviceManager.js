@@ -1,11 +1,13 @@
+const { EventEmitter } = require('events');
 const HomeAssistantProvider = require('./providers/homeAssistant');
 
 const PROVIDER_REGISTRY = {
   homeassistant: HomeAssistantProvider
 };
 
-class DeviceManager {
+class DeviceManager extends EventEmitter {
   constructor() {
+    super();
     this.providers = new Map();
   }
 
@@ -20,6 +22,13 @@ class DeviceManager {
     }
 
     const provider = new ProviderClass(config);
+
+    if (typeof provider.on === 'function') {
+      provider.on('state_changed', (data) => {
+        this.emit('state_changed', data);
+      });
+    }
+
     const result = await provider.connect();
     this.providers.set(type, provider);
     return result;

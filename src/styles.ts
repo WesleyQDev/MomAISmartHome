@@ -12,6 +12,15 @@ export const SMART_HOME_CSS = `
     100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
   }
 
+  @keyframes shSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .sh-spin {
+    animation: shSpin 0.8s linear infinite;
+  }
+
   html, body {
     margin: 0; padding: 0; height: 100%; overflow: hidden;
     background-color: #090814;

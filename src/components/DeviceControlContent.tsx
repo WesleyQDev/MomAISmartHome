@@ -239,15 +239,21 @@ export function DeviceControlCardContent({
   callServiceApi?: (domain: string, service: string, data?: any, providerType?: string) => Promise<any>
   isOverlay?: boolean
 }) {
-  const volumeDevice = device.domain === 'media_player'
-    ? device
-    : (allDevices.find((candidate) => candidate.domain === 'media_player' && candidate.name === device.name) || device)
-  const [brightness, setBrightnessState] = useState<number>(device.state?.brightness ?? 94)
+  const [currentDevice, setCurrentDevice] = useState<Device>(device)
+
+  React.useEffect(() => {
+    setCurrentDevice(device)
+  }, [device])
+
+  const volumeDevice = currentDevice.domain === 'media_player'
+    ? currentDevice
+    : (allDevices.find((candidate) => candidate.domain === 'media_player' && candidate.name === currentDevice.name) || currentDevice)
+  const [brightness, setBrightnessState] = useState<number>(currentDevice.state?.brightness ?? 94)
   const [tempPct, setTempPctState] = useState<number>(85)
   const [activeTab, setActiveTab] = useState<'brightness' | 'color' | 'temp'>('brightness')
   const [selectedRgbHex, setSelectedRgbHex] = useState<string>('#f97316')
 
-  const [isOn, setIsOn] = useState<boolean>(Boolean(device.state?.on))
+  const [isOn, setIsOn] = useState<boolean>(Boolean(currentDevice.state?.on))
   const [isPlaying, setIsPlaying] = useState<boolean>(true)
   const [isMuted, setIsMuted] = useState<boolean>(false)
   const [showInputSelector, setShowInputSelector] = useState<boolean>(false)
@@ -258,10 +264,34 @@ export function DeviceControlCardContent({
   const volumeFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   React.useEffect(() => {
-    if (device.state?.on !== undefined) {
-      setIsOn(Boolean(device.state.on))
+    if (currentDevice.state?.on !== undefined) {
+      setIsOn(Boolean(currentDevice.state.on))
     }
-  }, [device.state?.on])
+    if (currentDevice.state?.brightness != null) {
+      setBrightnessState(currentDevice.state.brightness)
+    }
+    if (currentDevice.state?.hexColor) {
+      setSelectedRgbHex(currentDevice.state.hexColor)
+    } else if (Array.isArray(currentDevice.state?.rgbColor) && currentDevice.state.rgbColor.length === 3) {
+      const rgb = currentDevice.state.rgbColor
+      const hex = `#${rgb[0].toString(16).padStart(2, '0')}${rgb[1].toString(16).padStart(2, '0')}${rgb[2].toString(16).padStart(2, '0')}`
+      setSelectedRgbHex(hex)
+    }
+    if (currentDevice.state?.colorTempKelvin) {
+      const pct = Math.max(0, Math.min(100, Math.round(((6500 - currentDevice.state.colorTempKelvin) / (6500 - 2000)) * 100)))
+      setTempPctState(pct)
+    }
+    if (currentDevice.domain === 'media_player') {
+      if (currentDevice.state?.isPlaying !== undefined) {
+        setIsPlaying(currentDevice.state.isPlaying)
+      } else if (currentDevice.state?.rawState) {
+        setIsPlaying(currentDevice.state.rawState === 'playing')
+      }
+      if (currentDevice.state?.isMuted !== undefined) {
+        setIsMuted(Boolean(currentDevice.state.isMuted))
+      }
+    }
+  }, [currentDevice])
 
   React.useEffect(() => {
     if (volumeDevice.state?.volume === null || volumeDevice.state?.volume === undefined) return
@@ -269,6 +299,50 @@ export function DeviceControlCardContent({
     volumePercentRef.current = nextVolumePercent
     setVolumePercent(nextVolumePercent)
   }, [volumeDevice.state?.volume])
+
+  React.useEffect(() => {
+    let eventSource: EventSource | null = null
+
+    try {
+      const sseUrl = `${getApiBaseUrl()}/extensions/events`
+      eventSource = new EventSource(sseUrl)
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload.type === 'extension_event' && payload.eventType === 'state_changed') {
+            const updatedDevice: Device = payload.data?.device
+            if (updatedDevice) {
+              const isMatchCurrent = updatedDevice.id === currentDevice.id ||
+                updatedDevice.name.toLowerCase().trim() === currentDevice.name.toLowerCase().trim()
+              const isMatchVolume = updatedDevice.id === volumeDevice.id ||
+                updatedDevice.name.toLowerCase().trim() === volumeDevice.name.toLowerCase().trim()
+
+              if (isMatchCurrent) {
+                setCurrentDevice((prev) => ({
+                  ...prev,
+                  ...updatedDevice,
+                  state: { ...prev.state, ...updatedDevice.state },
+                  attributes: { ...prev.attributes, ...updatedDevice.attributes }
+                }))
+              }
+              if (isMatchVolume && updatedDevice.state?.volume !== undefined && updatedDevice.state.volume !== null) {
+                const nextVol = volumeToPercent(updatedDevice.state.volume)
+                setVolumePercent(nextVol)
+                volumePercentRef.current = nextVol
+              }
+            }
+          }
+        } catch (err) {}
+      }
+    } catch (err) {}
+
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+    }
+  }, [currentDevice.id, currentDevice.name, volumeDevice.id, volumeDevice.name])
 
   React.useEffect(() => {
     return () => {
@@ -647,7 +721,7 @@ export function DeviceControlCardContent({
               className="sh-pill-slider-fill"
               style={{
                 height: `${tempPct}%`,
-                background: 'linear-gradient(to top, #ff9e3b, #60a5fa)'
+                background: 'linear-gradient(to top, #ffffff 0%, #ffdfb8 40%, #ff8c00 100%)'
               }}
             >
               <div className="sh-pill-handle" />

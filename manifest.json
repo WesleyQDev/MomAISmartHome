@@ -1,9 +1,9 @@
-{
+﻿{
   "id": "momaismarthome",
   "name": "MomAI Smart Home",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "packaged",
-  "description": "Integração com Home Assistant e suporte a múltiplos provedores de automação residencial.",
+  "description": "IntegraÃ§Ã£o com Home Assistant e suporte a mÃºltiplos provedores de automaÃ§Ã£o residencial.",
   "icon_bg": "#8b5cf6",
   "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5z\"/><path d=\"M6.5 12a7.8 7.8 0 0 1 11 0\"/><path d=\"M9 15a3.6 3.6 0 0 1 6 0\"/><path d=\"M12 18h.01\"/></svg>",
   "author": "MomAI Team",
@@ -19,13 +19,13 @@
     "panel": "dist/panel.js",
     "panelType": "momaismarthome-panel"
   },
-  "eventTypes": ["open_overlay"],
+  "eventTypes": ["open_overlay", "state_changed"],
   "theme": {
     "gradient": ["#a78bfa", "#7c3aed"],
     "accent": "#a78bfa"
   },
   "storage": {
-    "description": "Armazena as conexões e tokens do Home Assistant localmente de forma isolada.",
+    "description": "Armazena as conexÃµes e tokens do Home Assistant localmente de forma isolada.",
     "locations": ["connections.json", "smarthome.sqlite"]
   }
 }

@@ -167,6 +167,52 @@ async function runTests() {
   await provider.setClimate('climate.sala', 22, 'cool')
   assert('provider envia temperatura e modo de clima', serviceCalls[2]?.path === '/api/services/climate/set_temperature' && serviceCalls[3]?.path === '/api/services/climate/set_hvac_mode')
 
+  // Test 9: WebSocket state_changed propagation
+  let wsStateChangedEmitted = false
+  let receivedDevice = null
+  provider.on('state_changed', (evt) => {
+    wsStateChangedEmitted = true
+    receivedDevice = evt.device
+  })
+
+  // Simula o recebimento de mensagem state_changed vinda do WebSocket do Home Assistant
+  provider._handleWsMessage({
+    type: 'event',
+    event: {
+      event_type: 'state_changed',
+      data: {
+        entity_id: 'switch.cafe',
+        new_state: {
+          entity_id: 'switch.cafe',
+          state: 'on',
+          attributes: { friendly_name: 'Cafeteira da Cozinha' }
+        }
+      }
+    }
+  })
+
+  assert('HomeAssistantProvider processa evento WebSocket state_changed e emite evento local', wsStateChangedEmitted && receivedDevice && receivedDevice.id === 'switch.cafe' && receivedDevice.state.on === true)
+
+  // Test 10: Closing connecting WebSocket does not crash with unhandled error
+  let closedWithoutError = true
+  try {
+    const { EventEmitter } = require('events')
+    const mockSocket = new EventEmitter()
+    mockSocket.readyState = 0 // CONNECTING
+    mockSocket.terminate = function() {
+      process.nextTick(() => {
+        const err = new Error('WebSocket was closed before the connection was established')
+        mockSocket.emit('error', err)
+      })
+    }
+    provider.ws = mockSocket
+    provider._closeWebSocket(false)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  } catch (err) {
+    closedWithoutError = false
+  }
+  assert('Encerrar WebSocket em estado CONNECTING não lança erro não tratado', closedWithoutError)
+
   await db.close()
   console.log(`\n=== Resultado: ${passed} passaram, ${failed} falharam ===`)
   process.exit(failed > 0 ? 1 : 0)
