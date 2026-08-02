@@ -167,6 +167,42 @@ async function runTests() {
   await provider.setClimate('climate.sala', 22, 'cool')
   assert('provider envia temperatura e modo de clima', serviceCalls[2]?.path === '/api/services/climate/set_temperature' && serviceCalls[3]?.path === '/api/services/climate/set_hvac_mode')
 
+  // Test TV Remote Commands (YouTube, HDMI 1, HDMI 2, AV)
+  serviceCalls.length = 0
+  provider._get = async (path) => {
+    if (path === '/api/states') {
+      return [
+        { entity_id: 'media_player.tv_quarto', state: 'on' },
+        { entity_id: 'remote.tv_quarto', state: 'on' }
+      ]
+    }
+    return null
+  }
+
+  await provider.sendRemoteCommand('media_player.tv_quarto', 'YOUTUBE')
+  const youtubeCallMp = serviceCalls.find(c => c.path === '/api/services/media_player/play_media' && c.payload.media_content_id === 'com.google.android.youtube.tv')
+  const youtubeCallRm = serviceCalls.find(c => c.path === '/api/services/remote/turn_on' && c.payload.activity === 'com.google.android.youtube.tv')
+  assert('sendRemoteCommand YOUTUBE envia play_media app youtube e remote turn_on', Boolean(youtubeCallMp && youtubeCallRm))
+
+  serviceCalls.length = 0
+  await provider.sendRemoteCommand('media_player.tv_quarto', 'HDMI 1')
+  const hdmi1CallMp = serviceCalls.find(c => c.path === '/api/services/media_player/play_media' && c.payload.media_content_id === 'passthrough://media_1')
+  const hdmi1CallRm = serviceCalls.find(c => c.path === '/api/services/remote/turn_on' && c.payload.activity === 'passthrough://media_1')
+  assert('sendRemoteCommand HDMI 1 envia play_media passthrough://media_1 e remote turn_on', Boolean(hdmi1CallMp && hdmi1CallRm))
+
+  serviceCalls.length = 0
+  await provider.sendRemoteCommand('media_player.tv_quarto', 'HDMI 2')
+  const hdmi2CallMp = serviceCalls.find(c => c.path === '/api/services/media_player/play_media' && c.payload.media_content_id === 'passthrough://media_2')
+  const hdmi2CallRm = serviceCalls.find(c => c.path === '/api/services/remote/turn_on' && c.payload.activity === 'passthrough://media_2')
+  assert('sendRemoteCommand HDMI 2 envia play_media passthrough://media_2 e remote turn_on', Boolean(hdmi2CallMp && hdmi2CallRm))
+
+  serviceCalls.length = 0
+  await provider.sendRemoteCommand('media_player.tv_quarto', 'AV')
+  const avCallMp = serviceCalls.find(c => c.path === '/api/services/media_player/play_media' && c.payload.media_content_id === 'passthrough://media_av')
+  const avCallRm = serviceCalls.find(c => c.path === '/api/services/remote/turn_on' && c.payload.activity === 'passthrough://media_av')
+  assert('sendRemoteCommand AV envia play_media passthrough://media_av e remote turn_on', Boolean(avCallMp && avCallRm))
+
+
   // Test 9: WebSocket state_changed propagation
   let wsStateChangedEmitted = false
   let receivedDevice = null

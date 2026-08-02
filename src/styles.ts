@@ -465,25 +465,34 @@ export const SMART_HOME_CSS = `
   .sh-dpad-ring {
     width: 185px; height: 185px; border-radius: 50%; background: rgba(0,0,0,0.35); margin: 0 auto 22px; position: relative; display: flex; align-items: center; justify-content: center;
   }
-  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; }
-  .sh-dpad-btn:hover { color: #fff; transform: scale(1.1); }
+  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), color 0.1s ease, filter 0.1s ease; border-radius: 50%; user-select: none; }
+  .sh-dpad-btn:hover { color: #fff; transform: scale(1.18); }
+  .sh-dpad-btn:active { color: #a78bfa; transform: scale(0.88); filter: brightness(0.8); }
   .sh-dpad-btn.up { top: 4px; }
   .sh-dpad-btn.down { bottom: 4px; }
   .sh-dpad-btn.left { left: 4px; }
   .sh-dpad-btn.right { right: 4px; }
-  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .sh-dpad-center:hover { background: #8b5cf6; }
+  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-dpad-center:hover { background: #8b5cf6; transform: scale(1.05); box-shadow: 0 4px 14px rgba(139,92,246,0.4); }
+  .sh-dpad-center:active { transform: scale(0.90) translateY(2px); background: #7c3aed; box-shadow: inset 0 3px 6px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
   .sh-remote-actions-row { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: nowrap; }
-  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn:hover { transform: scale(1.08); background: rgba(255,255,255,0.12); color: #fff; box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
   .sh-remote-action-btn:hover, .sh-remote-action-btn.active { background: #8b5cf6; color: #fff; }
-  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; }
+  .sh-remote-action-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
+  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.youtube-pill:hover { transform: scale(1.06); box-shadow: 0 3px 10px rgba(255,255,255,0.3); }
+  .sh-remote-action-btn.youtube-pill:active { transform: scale(0.90) translateY(2px) !important; filter: brightness(0.9) !important; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3) !important; }
+  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.power:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(239,68,68,0.4); }
+  .sh-remote-action-btn.power:active { transform: scale(0.88) translateY(2px) !important; filter: brightness(0.85) !important; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5) !important; }
 
   .sh-input-selector-popover { background: rgba(24, 24, 28, 0.95); border: none !important; border-radius: 16px; padding: 12px; margin: 0 auto 18px; max-width: 310px; box-shadow: 0 10px 24px rgba(0,0,0,0.5); animation: shFadeIn 0.2s ease-out; }
   .sh-input-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
-  .sh-input-chip { background: rgba(255,255,255,0.06); border: none; border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; }
-  .sh-input-chip:hover { background: #8b5cf6; color: #fff; }
+  .sh-input-chip { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-input-chip:hover { background: #8b5cf6; color: #fff; transform: scale(1.03); box-shadow: 0 3px 8px rgba(139,92,246,0.3); }
+  .sh-input-chip:active { transform: scale(0.93) translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
   .sh-remote-media-row, .sh-remote-vol-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
   .sh-volume-control { position: relative; display: flex; align-items: center; justify-content: center; }
@@ -500,9 +509,12 @@ export const SMART_HOME_CSS = `
   .sh-volume-control:hover .sh-volume-feedback, .sh-volume-feedback.active {
     opacity: 1; visibility: visible; transform: translate(-50%, 0) scale(1);
   }
-  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .sh-remote-icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; transform: scale(1.08); box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
+  .sh-remote-icon-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
   .sh-remote-icon-btn.main { background: #8b5cf6; color: #fff; border: none; }
+  .sh-remote-icon-btn.main:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(139,92,246,0.4); }
+  .sh-remote-icon-btn.main:active { transform: scale(0.88) translateY(2px); background: #7c3aed; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
 `
 
 export function SmartHomeStyles() {

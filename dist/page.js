@@ -405,7 +405,8 @@ function DeviceControlCardContent({
   }
   const executeService = async (domain, service, data) => {
     if (callServiceApi) {
-      return callServiceApi(domain, service, data, "homeassistant");
+      const res = await callServiceApi(domain, service, data, "homeassistant");
+      if (res !== void 0) return res;
     }
     const winApi = window.api;
     if (typeof winApi?.callService === "function") {
@@ -478,22 +479,144 @@ function DeviceControlCardContent({
     if (onToggle) {
       onToggle(device);
     } else {
-      executeService("homeassistant", isOn ? "turn_off" : "turn_on", { entity_id: device.id });
+      executeService(device.domain || "homeassistant", isOn ? "turn_off" : "turn_on", { entity_id: device.id });
     }
   };
   const handleSendRemoteCommand = async (command) => {
-    const remoteDev = device.domain === "remote" ? device : allDevices.find((d) => d.domain === "remote") || device;
-    await executeService("remote", "send_command", {
-      entity_id: remoteDev.id,
-      command: [command]
-    });
+    const targetId = device.id;
+    const domain = device.domain;
+    const cmdUpper = command.toUpperCase();
+    if (cmdUpper === "PLAY" || cmdUpper === "PAUSE" || cmdUpper === "PLAY_PAUSE") {
+      await executeService("media_player", "media_play_pause", { entity_id: targetId });
+      return;
+    }
+    if (cmdUpper === "PREV" || cmdUpper === "PREVIOUS") {
+      await executeService("media_player", "media_previous_track", { entity_id: targetId });
+      return;
+    }
+    if (cmdUpper === "NEXT") {
+      await executeService("media_player", "media_next_track", { entity_id: targetId });
+      return;
+    }
+    if (cmdUpper === "YOUTUBE" || cmdUpper === "NETFLIX") {
+      const sourceName = cmdUpper === "YOUTUBE" ? "YouTube" : "Netflix";
+      const appId = cmdUpper === "YOUTUBE" ? "com.google.android.youtube.tv" : "com.netflix.ninja";
+      try {
+        const res = await executeService("media_player", "play_media", {
+          entity_id: targetId,
+          media_content_type: "app",
+          media_content_id: appId
+        });
+        if (res?.success !== false && res?.ok !== false) return;
+      } catch (e) {
+      }
+      const candidateRemote2 = allDevices.find((d) => d.domain === "remote" && (d.id.includes("tv") || d.name.toLowerCase().includes("tv")));
+      if (candidateRemote2) {
+        try {
+          const res = await executeService("remote", "turn_on", {
+            entity_id: candidateRemote2.id,
+            activity: appId
+          });
+          if (res?.success !== false && res?.ok !== false) return;
+        } catch (e) {
+        }
+      }
+      try {
+        const res = await executeService("media_player", "select_source", { entity_id: targetId, source: sourceName });
+        if (res?.success !== false && res?.ok !== false) return;
+      } catch (e) {
+      }
+    }
+    const inputActivityMap = {
+      "HDMI 1": "passthrough://media_1",
+      "HDMI1": "passthrough://media_1",
+      "HDMI 2": "passthrough://media_2",
+      "HDMI2": "passthrough://media_2",
+      "HDMI 3": "passthrough://media_3",
+      "HDMI3": "passthrough://media_3",
+      "AV": "passthrough://media_av"
+    };
+    if (inputActivityMap[cmdUpper]) {
+      const act = inputActivityMap[cmdUpper];
+      const chromecastMedia = allDevices.find((d) => d.domain === "media_player" && d.id !== targetId && d.id.includes("tv"));
+      const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId;
+      try {
+        await executeService("media_player", "play_media", {
+          entity_id: targetMediaId,
+          media_content_type: "app",
+          media_content_id: act
+        });
+        return;
+      } catch (e) {
+      }
+      try {
+        await executeService("media_player", "play_media", {
+          entity_id: targetId,
+          media_content_type: "app",
+          media_content_id: act
+        });
+        return;
+      } catch (e) {
+      }
+    }
+    const androidTvCommandMap = {
+      UP: ["DPAD_UP", "UP"],
+      DOWN: ["DPAD_DOWN", "DOWN"],
+      LEFT: ["DPAD_LEFT", "LEFT"],
+      RIGHT: ["DPAD_RIGHT", "RIGHT"],
+      ENTER: ["DPAD_CENTER", "ENTER", "OK"],
+      BACK: ["BACK"],
+      HOME: ["HOME"]
+    };
+    const candidates = androidTvCommandMap[cmdUpper] || [cmdUpper];
+    const candidateRemote = allDevices.find((d) => d.domain === "remote" && (d.id.includes("tv") || d.name.toLowerCase().includes("tv")));
+    const remoteTargetId = domain === "remote" ? targetId : candidateRemote?.id || (domain === "media_player" ? targetId.replace("media_player.", "remote.") : null);
+    if (remoteTargetId) {
+      for (const cmdCandidate of candidates) {
+        try {
+          const res = await executeService("remote", "send_command", {
+            entity_id: remoteTargetId,
+            command: [cmdCandidate]
+          });
+          if (res?.success !== false && res?.ok !== false) return;
+        } catch (err) {
+        }
+      }
+    }
+    for (const cmdCandidate of candidates) {
+      try {
+        const res = await executeService("media_player", "play_media", {
+          entity_id: targetId,
+          media_content_type: "action",
+          media_content_id: cmdCandidate
+        });
+        if (res?.success !== false && res?.ok !== false) return;
+      } catch (e) {
+      }
+      try {
+        const res = await executeService("media_player", "play_media", {
+          entity_id: targetId,
+          media_content_type: "key",
+          media_content_id: cmdCandidate
+        });
+        if (res?.success !== false && res?.ok !== false) return;
+      } catch (e) {
+      }
+    }
+    for (const cmdCandidate of candidates) {
+      try {
+        await executeService("remote", "send_command", {
+          entity_id: targetId,
+          command: [cmdCandidate]
+        });
+        return;
+      } catch (e) {
+      }
+    }
   };
   const handleSelectSource = async (source) => {
     setShowInputSelector(false);
-    await executeService("media_player", "select_source", {
-      entity_id: device.id,
-      source
-    });
+    await handleSendRemoteCommand(source);
   };
   const handleVolumeChange = async (direction) => {
     const nextVolumePercent = Math.max(0, Math.min(100, volumePercentRef.current + (direction === "up" ? 10 : -10)));
@@ -507,12 +630,20 @@ function DeviceControlCardContent({
     await executeService("media_player", direction === "up" ? "volume_up" : "volume_down", { entity_id: volumeDevice.id });
   };
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, "#ffffff");
-  if (device.domain === "remote" || device.domain === "media_player" && device.name.toLowerCase().includes("tv")) {
-    const inputSources = device.attributes?.source_list || ["HDMI 1", "HDMI 2", "AV", "TV", "YouTube", "Netflix"];
+  if (device.domain === "remote" || device.domain === "media_player" && (device.name.toLowerCase().includes("tv") || device.attributes?.deviceClass === "tv")) {
+    const rawSources = device.attributes?.source_list || currentDevice.attributes?.source_list;
+    const defaultSources = ["TV", "HDMI 1", "HDMI 2", "AV"];
+    const baseSources = Array.isArray(rawSources) && rawSources.length > 0 ? rawSources : defaultSources;
+    const inputSources = baseSources.filter((s) => {
+      const lower = s.toLowerCase().trim();
+      return lower !== "youtube" && lower !== "netflix";
+    });
     return /* @__PURE__ */ React2.createElement("div", { className: "sh-modal-detail", style: isOverlay ? { WebkitAppRegion: "drag" } : void 0 }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         className: "sh-modal-close-btn",
+        title: "Fechar",
+        "aria-label": "Fechar controle",
         onClick: (e) => {
           e.stopPropagation();
           if (onClose) onClose();
@@ -520,20 +651,24 @@ function DeviceControlCardContent({
         style: { WebkitAppRegion: "no-drag", pointerEvents: "auto", cursor: "pointer" }
       },
       "\u2715"
-    ), /* @__PURE__ */ React2.createElement("div", { className: "sh-modal-remote-content" }, /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-header" }, /* @__PURE__ */ React2.createElement("span", { className: "sh-remote-pill-tag" }, "Smart Remote"), /* @__PURE__ */ React2.createElement("h3", { className: "sh-remote-title" }, device.name), /* @__PURE__ */ React2.createElement("p", { className: "sh-remote-state" }, isOn ? "\u25CF Ligado" : "\u25CB Desligado", " \u2022 ", device.room || "Sala")), /* @__PURE__ */ React2.createElement("div", { className: "sh-dpad-ring", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn up", onClick: () => handleSendRemoteCommand("UP") }, "\u25B2"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn down", onClick: () => handleSendRemoteCommand("DOWN") }, "\u25BC"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn left", onClick: () => handleSendRemoteCommand("LEFT") }, "\u25C0"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn right", onClick: () => handleSendRemoteCommand("RIGHT") }, "\u25B6"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-center", onClick: () => handleSendRemoteCommand("ENTER") }, "OK")), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-actions-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn", onClick: () => handleSendRemoteCommand("BACK") }, /* @__PURE__ */ React2.createElement(SvgBack, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn", onClick: () => handleSendRemoteCommand("HOME") }, /* @__PURE__ */ React2.createElement(SvgHome, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn", onClick: () => setShowInputSelector(!showInputSelector) }, /* @__PURE__ */ React2.createElement(SvgTv, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn youtube-pill", onClick: () => handleSendRemoteCommand("YOUTUBE") }, /* @__PURE__ */ React2.createElement(SvgYoutube, null)), /* @__PURE__ */ React2.createElement("button", { className: `sh-remote-action-btn power ${isOn ? "active" : ""}`, onClick: handleToggle }, /* @__PURE__ */ React2.createElement(SvgPower, { size: 18, color: "#ffffff" }))), showInputSelector && /* @__PURE__ */ React2.createElement("div", { className: "sh-input-selector-popover", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("div", { className: "sh-input-grid" }, inputSources.map((src) => /* @__PURE__ */ React2.createElement("button", { key: src, className: "sh-input-chip", onClick: () => handleSelectSource(src) }, /* @__PURE__ */ React2.createElement(SvgTv, { size: 14 }), " ", src)))), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-media-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-icon-btn", onClick: () => executeService("media_player", "media_previous_track", { entity_id: device.id }) }, /* @__PURE__ */ React2.createElement(SvgPrev, { size: 18 })), /* @__PURE__ */ React2.createElement(
+    ), /* @__PURE__ */ React2.createElement("div", { className: "sh-modal-remote-content" }, /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-header" }, /* @__PURE__ */ React2.createElement("span", { className: "sh-remote-pill-tag" }, "Smart Remote"), /* @__PURE__ */ React2.createElement("h3", { className: "sh-remote-title" }, device.name), /* @__PURE__ */ React2.createElement("p", { className: "sh-remote-state" }, isOn ? "\u25CF Ligado" : "\u25CB Desligado", " \u2022 ", device.room || "Sala")), /* @__PURE__ */ React2.createElement("div", { className: "sh-dpad-ring", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn up", title: "Navegar para cima", "aria-label": "Navegar para cima", onClick: () => handleSendRemoteCommand("UP") }, "\u25B2"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn down", title: "Navegar para baixo", "aria-label": "Navegar para baixo", onClick: () => handleSendRemoteCommand("DOWN") }, "\u25BC"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn left", title: "Navegar para esquerda", "aria-label": "Navegar para esquerda", onClick: () => handleSendRemoteCommand("LEFT") }, "\u25C0"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-btn right", title: "Navegar para direita", "aria-label": "Navegar para direita", onClick: () => handleSendRemoteCommand("RIGHT") }, "\u25B6"), /* @__PURE__ */ React2.createElement("button", { className: "sh-dpad-center", title: "Confirmar / OK", "aria-label": "Confirmar / OK", onClick: () => handleSendRemoteCommand("ENTER") }, "OK")), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-actions-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn", title: "Voltar", "aria-label": "Voltar", onClick: () => handleSendRemoteCommand("BACK") }, /* @__PURE__ */ React2.createElement(SvgBack, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn", title: "Menu In\xEDcio (Home)", "aria-label": "Menu In\xEDcio (Home)", onClick: () => handleSendRemoteCommand("HOME") }, /* @__PURE__ */ React2.createElement(SvgHome, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: `sh-remote-action-btn ${showInputSelector ? "active" : ""}`, title: "Entradas de v\xEDdeo (Outputs / HDMI / TV)", "aria-label": "Entradas de v\xEDdeo (Outputs / HDMI / TV)", onClick: () => setShowInputSelector(!showInputSelector) }, /* @__PURE__ */ React2.createElement(SvgTv, { size: 18 })), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-action-btn youtube-pill", title: "Abrir YouTube", "aria-label": "Abrir YouTube", onClick: () => handleSendRemoteCommand("YOUTUBE") }, /* @__PURE__ */ React2.createElement(SvgYoutube, null)), /* @__PURE__ */ React2.createElement("button", { className: `sh-remote-action-btn power ${isOn ? "active" : ""}`, title: isOn ? "Desligar TV" : "Ligar TV", "aria-label": isOn ? "Desligar TV" : "Ligar TV", onClick: handleToggle }, /* @__PURE__ */ React2.createElement(SvgPower, { size: 18, color: "#ffffff" }))), showInputSelector && /* @__PURE__ */ React2.createElement("div", { className: "sh-input-selector-popover", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("div", { className: "sh-input-grid" }, inputSources.map((src) => /* @__PURE__ */ React2.createElement("button", { key: src, className: "sh-input-chip", title: `Alternar para entrada ${src}`, "aria-label": `Alternar para entrada ${src}`, onClick: () => handleSelectSource(src) }, /* @__PURE__ */ React2.createElement(SvgTv, { size: 14 }), " ", src)))), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-media-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-icon-btn", title: "Faixa anterior / Voltar m\xEDdia", "aria-label": "Faixa anterior / Voltar m\xEDdia", onClick: () => handleSendRemoteCommand("PREV") }, /* @__PURE__ */ React2.createElement(SvgPrev, { size: 18 })), /* @__PURE__ */ React2.createElement(
       "button",
       {
         className: "sh-remote-icon-btn main",
+        title: isPlaying ? "Pausar reprodu\xE7\xE3o" : "Iniciar reprodu\xE7\xE3o",
+        "aria-label": isPlaying ? "Pausar reprodu\xE7\xE3o" : "Iniciar reprodu\xE7\xE3o",
         onClick: () => {
           setIsPlaying(!isPlaying);
-          executeService("media_player", isPlaying ? "media_pause" : "media_play", { entity_id: device.id });
+          handleSendRemoteCommand(isPlaying ? "PAUSE" : "PLAY");
         }
       },
       isPlaying ? /* @__PURE__ */ React2.createElement(SvgPause, { size: 18, color: "#ffffff" }) : /* @__PURE__ */ React2.createElement(SvgPlay, { size: 18, color: "#ffffff" })
-    ), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-icon-btn", onClick: () => executeService("media_player", "media_next_track", { entity_id: device.id }) }, /* @__PURE__ */ React2.createElement(SvgNext, { size: 18 }))), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-vol-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement(
+    ), /* @__PURE__ */ React2.createElement("button", { className: "sh-remote-icon-btn", title: "Pr\xF3xima faixa / Avan\xE7ar m\xEDdia", "aria-label": "Pr\xF3xima faixa / Avan\xE7ar m\xEDdia", onClick: () => handleSendRemoteCommand("NEXT") }, /* @__PURE__ */ React2.createElement(SvgNext, { size: 18 }))), /* @__PURE__ */ React2.createElement("div", { className: "sh-remote-vol-row", style: isOverlay ? { WebkitAppRegion: "no-drag" } : void 0 }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         className: "sh-remote-icon-btn",
+        title: isMuted ? "Restaurar som (Desmudar)" : "Silenciar (Mudo)",
+        "aria-label": isMuted ? "Restaurar som (Desmudar)" : "Silenciar (Mudo)",
         onClick: () => {
           setIsMuted(!isMuted);
           executeService("media_player", "volume_mute", { entity_id: device.id, is_volume_muted: !isMuted });
@@ -552,6 +687,7 @@ function DeviceControlCardContent({
       "button",
       {
         className: "sh-remote-icon-btn",
+        title: "Diminuir volume",
         "aria-label": "Diminuir volume",
         onClick: () => handleVolumeChange("down")
       },
@@ -568,6 +704,7 @@ function DeviceControlCardContent({
       "button",
       {
         className: "sh-remote-icon-btn",
+        title: "Aumentar volume",
         "aria-label": "Aumentar volume",
         onClick: () => handleVolumeChange("up")
       },
@@ -1133,25 +1270,34 @@ var SMART_HOME_CSS = `
   .sh-dpad-ring {
     width: 185px; height: 185px; border-radius: 50%; background: rgba(0,0,0,0.35); margin: 0 auto 22px; position: relative; display: flex; align-items: center; justify-content: center;
   }
-  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; }
-  .sh-dpad-btn:hover { color: #fff; transform: scale(1.1); }
+  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), color 0.1s ease, filter 0.1s ease; border-radius: 50%; user-select: none; }
+  .sh-dpad-btn:hover { color: #fff; transform: scale(1.18); }
+  .sh-dpad-btn:active { color: #a78bfa; transform: scale(0.88); filter: brightness(0.8); }
   .sh-dpad-btn.up { top: 4px; }
   .sh-dpad-btn.down { bottom: 4px; }
   .sh-dpad-btn.left { left: 4px; }
   .sh-dpad-btn.right { right: 4px; }
-  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .sh-dpad-center:hover { background: #8b5cf6; }
+  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-dpad-center:hover { background: #8b5cf6; transform: scale(1.05); box-shadow: 0 4px 14px rgba(139,92,246,0.4); }
+  .sh-dpad-center:active { transform: scale(0.90) translateY(2px); background: #7c3aed; box-shadow: inset 0 3px 6px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
   .sh-remote-actions-row { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: nowrap; }
-  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn:hover { transform: scale(1.08); background: rgba(255,255,255,0.12); color: #fff; box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
   .sh-remote-action-btn:hover, .sh-remote-action-btn.active { background: #8b5cf6; color: #fff; }
-  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; }
+  .sh-remote-action-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
+  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.youtube-pill:hover { transform: scale(1.06); box-shadow: 0 3px 10px rgba(255,255,255,0.3); }
+  .sh-remote-action-btn.youtube-pill:active { transform: scale(0.90) translateY(2px) !important; filter: brightness(0.9) !important; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3) !important; }
+  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.power:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(239,68,68,0.4); }
+  .sh-remote-action-btn.power:active { transform: scale(0.88) translateY(2px) !important; filter: brightness(0.85) !important; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5) !important; }
 
   .sh-input-selector-popover { background: rgba(24, 24, 28, 0.95); border: none !important; border-radius: 16px; padding: 12px; margin: 0 auto 18px; max-width: 310px; box-shadow: 0 10px 24px rgba(0,0,0,0.5); animation: shFadeIn 0.2s ease-out; }
   .sh-input-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
-  .sh-input-chip { background: rgba(255,255,255,0.06); border: none; border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; }
-  .sh-input-chip:hover { background: #8b5cf6; color: #fff; }
+  .sh-input-chip { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-input-chip:hover { background: #8b5cf6; color: #fff; transform: scale(1.03); box-shadow: 0 3px 8px rgba(139,92,246,0.3); }
+  .sh-input-chip:active { transform: scale(0.93) translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
   .sh-remote-media-row, .sh-remote-vol-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
   .sh-volume-control { position: relative; display: flex; align-items: center; justify-content: center; }
@@ -1168,9 +1314,12 @@ var SMART_HOME_CSS = `
   .sh-volume-control:hover .sh-volume-feedback, .sh-volume-feedback.active {
     opacity: 1; visibility: visible; transform: translate(-50%, 0) scale(1);
   }
-  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: none; color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .sh-remote-icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; transform: scale(1.08); box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
+  .sh-remote-icon-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
   .sh-remote-icon-btn.main { background: #8b5cf6; color: #fff; border: none; }
+  .sh-remote-icon-btn.main:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(139,92,246,0.4); }
+  .sh-remote-icon-btn.main:active { transform: scale(0.88) translateY(2px); background: #7c3aed; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
 `;
 function SmartHomeStyles() {
   return React3.createElement("style", null, SMART_HOME_CSS);

@@ -131,7 +131,10 @@ class HomeAssistantProvider extends BaseProvider {
         if (typeof ws.on === 'function') {
           ws.on(event, listener)
         } else if (typeof ws.addEventListener === 'function') {
-          ws.addEventListener(event, (e) => listener(e.data || e))
+          ws.addEventListener(event, (e) => {
+            const data = e.data !== undefined ? e.data : e
+            listener(data)
+          })
         }
       }
 
@@ -236,6 +239,8 @@ class HomeAssistantProvider extends BaseProvider {
       try {
         if (typeof socket.on === 'function') {
           socket.on('error', () => {})
+        } else if (typeof socket.addEventListener === 'function') {
+          try { socket.addEventListener('error', () => {}) } catch {}
         }
         if (typeof socket.terminate === 'function') {
           socket.terminate()
@@ -517,9 +522,156 @@ class HomeAssistantProvider extends BaseProvider {
 
   async sendRemoteCommand(deviceId, command, extra = {}) {
     const domain = deviceId.split('.')[0]
-    if (domain === 'remote') {
-      return this._post('/api/services/remote/send_command', { entity_id: deviceId, command, ...extra })
+    const cmdUpper = String(Array.isArray(command) ? command[0] : command).toUpperCase().trim()
+
+    // Encontrar entidades de TV relacionadas (ex: media_player.tv_thucos_2, remote.tv_thucos)
+    let relatedEntities = []
+    try {
+      const baseName = deviceId.split('.')[1].replace(/_\d+$/, '')
+      const states = await this._get('/api/states')
+      relatedEntities = states.filter(s => {
+        const id = s.entity_id
+        return (id.startsWith('media_player.') || id.startsWith('remote.')) && id.includes(baseName)
+      })
+    } catch (e) {}
+
+    const mediaPlayers = relatedEntities.filter(s => s.entity_id.startsWith('media_player.'))
+    const remotes = relatedEntities.filter(s => s.entity_id.startsWith('remote.'))
+
+    if (cmdUpper === 'YOUTUBE' || cmdUpper === 'NETFLIX') {
+      const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
+      let executed = false
+
+      for (const mp of mediaPlayers) {
+        try {
+          await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: appId })
+          executed = true
+        } catch (e) {}
+      }
+      for (const rm of remotes) {
+        try {
+          await this._post('/api/services/remote/turn_on', { entity_id: rm.entity_id, activity: appId })
+          executed = true
+        } catch (e) {}
+      }
+
+      if (executed) return { success: true }
     }
+
+    const inputActivityMap = {
+      'HDMI 1': 'passthrough://media_1',
+      'HDMI1': 'passthrough://media_1',
+      'HDMI 2': 'passthrough://media_2',
+      'HDMI2': 'passthrough://media_2',
+      'HDMI 3': 'passthrough://media_3',
+      'HDMI3': 'passthrough://media_3',
+      'TV': 'passthrough://media_0',
+      'AV': 'passthrough://media_av'
+    }
+
+    if (inputActivityMap[cmdUpper]) {
+      const act = inputActivityMap[cmdUpper]
+      let inputExecuted = false
+
+      // 1. Tenta enviar TV_INPUT para o remote (exibe/alterna o menu de entradas na TV física)
+      for (const rm of remotes) {
+        try {
+          await this._post('/api/services/remote/send_command', { entity_id: rm.entity_id, command: ['TV_INPUT'] })
+          inputExecuted = true
+        } catch (e) {}
+      }
+
+      // 2. Tenta acionar com.tcl.tv ou o passthrough na mídia
+      for (const mp of mediaPlayers) {
+        try {
+          await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: 'com.tcl.tv' })
+          inputExecuted = true
+        } catch (e) {}
+        try {
+          await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: act })
+          inputExecuted = true
+        } catch (e) {}
+      }
+
+      if (!inputExecuted && (domain === 'remote' || domain === 'media_player')) {
+        try {
+          await this._post('/api/services/remote/send_command', { entity_id: deviceId.replace('media_player.', 'remote.'), command: ['TV_INPUT'] })
+          inputExecuted = true
+        } catch (e) {}
+      }
+
+      if (inputExecuted) return { success: true }
+    }
+
+    if (domain === 'remote') {
+      const remoteCmdMap = {
+        UP: 'DPAD_UP',
+        DOWN: 'DPAD_DOWN',
+        LEFT: 'DPAD_LEFT',
+        RIGHT: 'DPAD_RIGHT',
+        ENTER: 'DPAD_CENTER',
+        OK: 'DPAD_CENTER',
+        PLAY: 'MEDIA_PLAY',
+        PAUSE: 'MEDIA_PAUSE',
+        PLAY_PAUSE: 'MEDIA_PLAY_PAUSE',
+        PREV: 'MEDIA_PREVIOUS',
+        PREVIOUS: 'MEDIA_PREVIOUS',
+        NEXT: 'MEDIA_NEXT',
+        VOLUME_UP: 'VOLUME_UP',
+        VOL_UP: 'VOLUME_UP',
+        VOLUME_DOWN: 'VOLUME_DOWN',
+        VOL_DOWN: 'VOLUME_DOWN',
+        MUTE: 'MUTE',
+        BACK: 'BACK',
+        HOME: 'HOME',
+        TV: 'TV_INPUT',
+        AV: 'TV_INPUT',
+        INPUT: 'TV_INPUT',
+        TV_INPUT: 'TV_INPUT'
+      }
+
+      const targetCmd = remoteCmdMap[cmdUpper] || cmdUpper
+      const commandArray = [targetCmd]
+      return this._post('/api/services/remote/send_command', { entity_id: deviceId, command: commandArray, ...extra })
+    }
+
+    // 1. YouTube e Netflix via select_source ou play_media (Android TV App ID / Deep Link)
+    if (cmdUpper === 'YOUTUBE' || cmdUpper === 'NETFLIX') {
+      const sourceName = cmdUpper === 'YOUTUBE' ? 'YouTube' : 'Netflix'
+      const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
+
+      try {
+        const res = await this.controlMedia(deviceId, 'source', sourceName)
+        if (res?.success !== false) return res
+      } catch (e) {}
+
+      try {
+        const res = await this._post('/api/services/media_player/play_media', {
+          entity_id: deviceId,
+          media_content_type: 'app',
+          media_content_id: appId
+        })
+        if (res?.success !== false) return res
+      } catch (e) {}
+
+      return this._post('/api/services/media_player/play_media', {
+        entity_id: deviceId,
+        media_content_type: 'url',
+        media_content_id: cmdUpper === 'YOUTUBE' ? 'https://www.youtube.com' : 'https://www.netflix.com'
+      })
+    }
+
+    // 2. Comandos de navegação / ação em media_player
+    if (['UP', 'DOWN', 'LEFT', 'RIGHT', 'ENTER', 'OK', 'BACK', 'HOME', 'MENU'].includes(cmdUpper)) {
+      try {
+        return await this._post('/api/services/media_player/play_media', {
+          entity_id: deviceId,
+          media_content_type: 'action',
+          media_content_id: cmdUpper === 'ENTER' ? 'DPAD_CENTER' : (cmdUpper === 'UP' ? 'DPAD_UP' : (cmdUpper === 'DOWN' ? 'DPAD_DOWN' : (cmdUpper === 'LEFT' ? 'DPAD_LEFT' : (cmdUpper === 'RIGHT' ? 'DPAD_RIGHT' : cmdUpper))))
+        })
+      } catch (e) {}
+    }
+
     return this.controlMedia(deviceId, command, extra.value)
   }
 

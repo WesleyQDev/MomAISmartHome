@@ -400,7 +400,8 @@ export function DeviceControlCardContent({
 
   const executeService = async (domain: string, service: string, data: any) => {
     if (callServiceApi) {
-      return callServiceApi(domain, service, data, 'homeassistant')
+      const res = await callServiceApi(domain, service, data, 'homeassistant')
+      if (res !== undefined) return res
     }
     const winApi = (window as any).api
     if (typeof winApi?.callService === 'function') {
@@ -484,24 +485,170 @@ export function DeviceControlCardContent({
     if (onToggle) {
       onToggle(device)
     } else {
-      executeService('homeassistant', isOn ? 'turn_off' : 'turn_on', { entity_id: device.id })
+      executeService(device.domain || 'homeassistant', isOn ? 'turn_off' : 'turn_on', { entity_id: device.id })
     }
   }
 
   const handleSendRemoteCommand = async (command: string) => {
-    const remoteDev = device.domain === 'remote' ? device : (allDevices.find(d => d.domain === 'remote') || device)
-    await executeService('remote', 'send_command', {
-      entity_id: remoteDev.id,
-      command: [command]
-    })
+    const targetId = device.id
+    const domain = device.domain
+    const cmdUpper = command.toUpperCase()
+
+    // 1. Tratamento de mídia padrão para reprodução
+    if (cmdUpper === 'PLAY' || cmdUpper === 'PAUSE' || cmdUpper === 'PLAY_PAUSE') {
+      await executeService('media_player', 'media_play_pause', { entity_id: targetId })
+      return
+    }
+    if (cmdUpper === 'PREV' || cmdUpper === 'PREVIOUS') {
+      await executeService('media_player', 'media_previous_track', { entity_id: targetId })
+      return
+    }
+    if (cmdUpper === 'NEXT') {
+      await executeService('media_player', 'media_next_track', { entity_id: targetId })
+      return
+    }
+
+    // 2. Se a ação for um app (ex: YouTube ou Netflix)
+    if (cmdUpper === 'YOUTUBE' || cmdUpper === 'NETFLIX') {
+      const sourceName = cmdUpper === 'YOUTUBE' ? 'YouTube' : 'Netflix'
+      const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
+
+      // 2a. Tentar media_player.play_media com o appId do Android TV
+      try {
+        const res = await executeService('media_player', 'play_media', {
+          entity_id: targetId,
+          media_content_type: 'app',
+          media_content_id: appId
+        })
+        if (res?.success !== false && res?.ok !== false) return
+      } catch (e) {}
+
+      // 2b. Tentar remote.turn_on com activity no remote (ex: remote.tv_thucos)
+      const candidateRemote = allDevices.find(d => d.domain === 'remote' && (d.id.includes('tv') || d.name.toLowerCase().includes('tv')))
+      if (candidateRemote) {
+        try {
+          const res = await executeService('remote', 'turn_on', {
+            entity_id: candidateRemote.id,
+            activity: appId
+          })
+          if (res?.success !== false && res?.ok !== false) return
+        } catch (e) {}
+      }
+
+      // 2c. Tentar media_player.select_source
+      try {
+        const res = await executeService('media_player', 'select_source', { entity_id: targetId, source: sourceName })
+        if (res?.success !== false && res?.ok !== false) return
+      } catch (e) {}
+    }
+
+    // 3. Suporte às Entradas HDMI 1, HDMI 2, HDMI 3 e AV
+    const inputActivityMap: Record<string, string> = {
+      'HDMI 1': 'passthrough://media_1',
+      'HDMI1': 'passthrough://media_1',
+      'HDMI 2': 'passthrough://media_2',
+      'HDMI2': 'passthrough://media_2',
+      'HDMI 3': 'passthrough://media_3',
+      'HDMI3': 'passthrough://media_3',
+      'AV': 'passthrough://media_av'
+    }
+
+    if (inputActivityMap[cmdUpper]) {
+      const act = inputActivityMap[cmdUpper]
+
+      // Tentar no media_player.tv_thucos (Chromecast / Google TV entity)
+      const chromecastMedia = allDevices.find(d => d.domain === 'media_player' && d.id !== targetId && d.id.includes('tv'))
+      const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId
+
+      try {
+        await executeService('media_player', 'play_media', {
+          entity_id: targetMediaId,
+          media_content_type: 'app',
+          media_content_id: act
+        })
+        return
+      } catch (e) {}
+
+      try {
+        await executeService('media_player', 'play_media', {
+          entity_id: targetId,
+          media_content_type: 'app',
+          media_content_id: act
+        })
+        return
+      } catch (e) {}
+    }
+
+    // Mapeamento universal de comandos para Android TV
+    const androidTvCommandMap: Record<string, string[]> = {
+      UP: ['DPAD_UP', 'UP'],
+      DOWN: ['DPAD_DOWN', 'DOWN'],
+      LEFT: ['DPAD_LEFT', 'LEFT'],
+      RIGHT: ['DPAD_RIGHT', 'RIGHT'],
+      ENTER: ['DPAD_CENTER', 'ENTER', 'OK'],
+      BACK: ['BACK'],
+      HOME: ['HOME']
+    }
+    const candidates = androidTvCommandMap[cmdUpper] || [cmdUpper]
+
+    // 4. Tentar remote.send_command na própria entidade ou em entidade remote correspondente (ex: remote.tv_thucos)
+    const candidateRemote = allDevices.find(d => d.domain === 'remote' && (
+      d.id.includes('tv') ||
+      d.name.toLowerCase().includes('tv')
+    ))
+
+    const remoteTargetId = domain === 'remote'
+      ? targetId
+      : (candidateRemote?.id || (domain === 'media_player' ? targetId.replace('media_player.', 'remote.') : null))
+
+    if (remoteTargetId) {
+      for (const cmdCandidate of candidates) {
+        try {
+          const res = await executeService('remote', 'send_command', {
+            entity_id: remoteTargetId,
+            command: [cmdCandidate]
+          })
+          if (res?.success !== false && res?.ok !== false) return
+        } catch (err) {}
+      }
+    }
+
+    // 4. Se a TV for um media_player do Android TV / Chromecast (media_player.play_media com chave 'action' ou 'key')
+    for (const cmdCandidate of candidates) {
+      try {
+        const res = await executeService('media_player', 'play_media', {
+          entity_id: targetId,
+          media_content_type: 'action',
+          media_content_id: cmdCandidate
+        })
+        if (res?.success !== false && res?.ok !== false) return
+      } catch (e) {}
+
+      try {
+        const res = await executeService('media_player', 'play_media', {
+          entity_id: targetId,
+          media_content_type: 'key',
+          media_content_id: cmdCandidate
+        })
+        if (res?.success !== false && res?.ok !== false) return
+      } catch (e) {}
+    }
+
+    // 5. Fallback final via remote.send_command no ID da própria entidade media_player (usado por algumas integrações do HA)
+    for (const cmdCandidate of candidates) {
+      try {
+        await executeService('remote', 'send_command', {
+          entity_id: targetId,
+          command: [cmdCandidate]
+        })
+        return
+      } catch (e) {}
+    }
   }
 
   const handleSelectSource = async (source: string) => {
     setShowInputSelector(false)
-    await executeService('media_player', 'select_source', {
-      entity_id: device.id,
-      source
-    })
+    await handleSendRemoteCommand(source)
   }
 
   const handleVolumeChange = async (direction: 'down' | 'up') => {
@@ -520,12 +667,22 @@ export function DeviceControlCardContent({
 
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, '#ffffff')
 
-  if (device.domain === 'remote' || (device.domain === 'media_player' && device.name.toLowerCase().includes('tv'))) {
-    const inputSources = (device.attributes?.source_list as string[]) || ['HDMI 1', 'HDMI 2', 'AV', 'TV', 'YouTube', 'Netflix']
+  if (device.domain === 'remote' || (device.domain === 'media_player' && (device.name.toLowerCase().includes('tv') || device.attributes?.deviceClass === 'tv'))) {
+    const rawSources = (device.attributes?.source_list as string[]) || (currentDevice.attributes?.source_list as string[])
+    const defaultSources = ['TV', 'HDMI 1', 'HDMI 2', 'AV']
+    const baseSources = (Array.isArray(rawSources) && rawSources.length > 0) ? rawSources : defaultSources
+    // Filtrar YouTube e Netflix pois já existe o botão de atalho dedicado do YouTube na barra principal
+    const inputSources = baseSources.filter(s => {
+      const lower = s.toLowerCase().trim()
+      return lower !== 'youtube' && lower !== 'netflix'
+    })
+
     return (
       <div className="sh-modal-detail" style={isOverlay ? { WebkitAppRegion: 'drag' } as any : undefined}>
         <button
           className="sh-modal-close-btn"
+          title="Fechar"
+          aria-label="Fechar controle"
           onClick={(e) => {
             e.stopPropagation()
             if (onClose) onClose()
@@ -542,27 +699,27 @@ export function DeviceControlCardContent({
           </div>
 
           <div className="sh-dpad-ring" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
-            <button className="sh-dpad-btn up" onClick={() => handleSendRemoteCommand('UP')}>▲</button>
-            <button className="sh-dpad-btn down" onClick={() => handleSendRemoteCommand('DOWN')}>▼</button>
-            <button className="sh-dpad-btn left" onClick={() => handleSendRemoteCommand('LEFT')}>◀</button>
-            <button className="sh-dpad-btn right" onClick={() => handleSendRemoteCommand('RIGHT')}>▶</button>
-            <button className="sh-dpad-center" onClick={() => handleSendRemoteCommand('ENTER')}>OK</button>
+            <button className="sh-dpad-btn up" title="Navegar para cima" aria-label="Navegar para cima" onClick={() => handleSendRemoteCommand('UP')}>▲</button>
+            <button className="sh-dpad-btn down" title="Navegar para baixo" aria-label="Navegar para baixo" onClick={() => handleSendRemoteCommand('DOWN')}>▼</button>
+            <button className="sh-dpad-btn left" title="Navegar para esquerda" aria-label="Navegar para esquerda" onClick={() => handleSendRemoteCommand('LEFT')}>◀</button>
+            <button className="sh-dpad-btn right" title="Navegar para direita" aria-label="Navegar para direita" onClick={() => handleSendRemoteCommand('RIGHT')}>▶</button>
+            <button className="sh-dpad-center" title="Confirmar / OK" aria-label="Confirmar / OK" onClick={() => handleSendRemoteCommand('ENTER')}>OK</button>
           </div>
 
           <div className="sh-remote-actions-row" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
-            <button className="sh-remote-action-btn" onClick={() => handleSendRemoteCommand('BACK')}>
+            <button className="sh-remote-action-btn" title="Voltar" aria-label="Voltar" onClick={() => handleSendRemoteCommand('BACK')}>
               <SvgBack size={18} />
             </button>
-            <button className="sh-remote-action-btn" onClick={() => handleSendRemoteCommand('HOME')}>
+            <button className="sh-remote-action-btn" title="Menu Início (Home)" aria-label="Menu Início (Home)" onClick={() => handleSendRemoteCommand('HOME')}>
               <SvgHome size={18} />
             </button>
-            <button className="sh-remote-action-btn" onClick={() => setShowInputSelector(!showInputSelector)}>
+            <button className={`sh-remote-action-btn ${showInputSelector ? 'active' : ''}`} title="Entradas de vídeo (Outputs / HDMI / TV)" aria-label="Entradas de vídeo (Outputs / HDMI / TV)" onClick={() => setShowInputSelector(!showInputSelector)}>
               <SvgTv size={18} />
             </button>
-            <button className="sh-remote-action-btn youtube-pill" onClick={() => handleSendRemoteCommand('YOUTUBE')}>
+            <button className="sh-remote-action-btn youtube-pill" title="Abrir YouTube" aria-label="Abrir YouTube" onClick={() => handleSendRemoteCommand('YOUTUBE')}>
               <SvgYoutube />
             </button>
-            <button className={`sh-remote-action-btn power ${isOn ? 'active' : ''}`} onClick={handleToggle}>
+            <button className={`sh-remote-action-btn power ${isOn ? 'active' : ''}`} title={isOn ? 'Desligar TV' : 'Ligar TV'} aria-label={isOn ? 'Desligar TV' : 'Ligar TV'} onClick={handleToggle}>
               <SvgPower size={18} color="#ffffff" />
             </button>
           </div>
@@ -571,7 +728,7 @@ export function DeviceControlCardContent({
             <div className="sh-input-selector-popover" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
               <div className="sh-input-grid">
                 {inputSources.map((src) => (
-                  <button key={src} className="sh-input-chip" onClick={() => handleSelectSource(src)}>
+                  <button key={src} className="sh-input-chip" title={`Alternar para entrada ${src}`} aria-label={`Alternar para entrada ${src}`} onClick={() => handleSelectSource(src)}>
                     <SvgTv size={14} /> {src}
                   </button>
                 ))}
@@ -580,19 +737,21 @@ export function DeviceControlCardContent({
           )}
 
           <div className="sh-remote-media-row" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
-            <button className="sh-remote-icon-btn" onClick={() => executeService('media_player', 'media_previous_track', { entity_id: device.id })}>
+            <button className="sh-remote-icon-btn" title="Faixa anterior / Voltar mídia" aria-label="Faixa anterior / Voltar mídia" onClick={() => handleSendRemoteCommand('PREV')}>
               <SvgPrev size={18} />
             </button>
             <button
               className="sh-remote-icon-btn main"
+              title={isPlaying ? 'Pausar reprodução' : 'Iniciar reprodução'}
+              aria-label={isPlaying ? 'Pausar reprodução' : 'Iniciar reprodução'}
               onClick={() => {
                 setIsPlaying(!isPlaying)
-                executeService('media_player', isPlaying ? 'media_pause' : 'media_play', { entity_id: device.id })
+                handleSendRemoteCommand(isPlaying ? 'PAUSE' : 'PLAY')
               }}
             >
               {isPlaying ? <SvgPause size={18} color="#ffffff" /> : <SvgPlay size={18} color="#ffffff" />}
             </button>
-            <button className="sh-remote-icon-btn" onClick={() => executeService('media_player', 'media_next_track', { entity_id: device.id })}>
+            <button className="sh-remote-icon-btn" title="Próxima faixa / Avançar mídia" aria-label="Próxima faixa / Avançar mídia" onClick={() => handleSendRemoteCommand('NEXT')}>
               <SvgNext size={18} />
             </button>
           </div>
@@ -600,6 +759,8 @@ export function DeviceControlCardContent({
           <div className="sh-remote-vol-row" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
             <button
               className="sh-remote-icon-btn"
+              title={isMuted ? 'Restaurar som (Desmudar)' : 'Silenciar (Mudo)'}
+              aria-label={isMuted ? 'Restaurar som (Desmudar)' : 'Silenciar (Mudo)'}
               onClick={() => {
                 setIsMuted(!isMuted)
                 executeService('media_player', 'volume_mute', { entity_id: device.id, is_volume_muted: !isMuted })
@@ -616,6 +777,7 @@ export function DeviceControlCardContent({
               </span>
               <button
                 className="sh-remote-icon-btn"
+                title="Diminuir volume"
                 aria-label="Diminuir volume"
                 onClick={() => handleVolumeChange('down')}
               >
@@ -631,6 +793,7 @@ export function DeviceControlCardContent({
               </span>
               <button
                 className="sh-remote-icon-btn"
+                title="Aumentar volume"
                 aria-label="Aumentar volume"
                 onClick={() => handleVolumeChange('up')}
               >

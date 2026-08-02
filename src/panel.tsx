@@ -65,6 +65,30 @@ export function SmartHomePanel(props: any) {
           device={device}
           allDevices={data?.allDevices || []}
           onClose={handleClose}
+          callServiceApi={async (domain, service, serviceData, providerType) => {
+            const winApi = (window as any).api
+            if (typeof winApi?.callService === 'function') {
+              return winApi.callService(domain, service, serviceData, providerType || 'homeassistant')
+            }
+            const baseUrl = (winApi?.getApiBaseUrl && winApi.getApiBaseUrl()) || 'http://127.0.0.1:8050'
+            const token = (winApi?.getSessionToken && winApi.getSessionToken()) || ''
+            try {
+              const res = await fetch(`${baseUrl}/extensions/momaismarthome/command`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Session-Token': token
+                },
+                body: JSON.stringify({
+                  toolName: 'callService',
+                  args: { domain, service, data: serviceData, providerType: providerType || 'homeassistant' }
+                })
+              })
+              return await res.json()
+            } catch (err) {
+              console.error('[SmartHomePanel] Erro ao executar serviço:', err)
+            }
+          }}
           isOverlay={true}
         />
       )}
