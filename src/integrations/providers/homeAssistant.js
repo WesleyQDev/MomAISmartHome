@@ -569,22 +569,63 @@ class HomeAssistantProvider extends BaseProvider {
       'AV': 'passthrough://media_av'
     }
 
-    if (inputActivityMap[cmdUpper]) {
-      const act = inputActivityMap[cmdUpper]
+    const isTvCmd = cmdUpper === 'TV' || cmdUpper === 'TV1' || cmdUpper === 'LIVE TV' || cmdUpper === 'TV AO VIVO'
+    const isInputCmd = Boolean(inputActivityMap[cmdUpper]) || isTvCmd
+
+    if (isInputCmd) {
+      const act = inputActivityMap[cmdUpper] || 'passthrough://media_0'
       let inputExecuted = false
 
+      // 1. Tentar media_player.select_source com o nome da entrada fornecido
+      for (const mp of mediaPlayers) {
+        try {
+          await this._post('/api/services/media_player/select_source', { entity_id: mp.entity_id, source: command })
+          inputExecuted = true
+        } catch (e) {}
+
+        // Se for comando de TV, procurar termos equivalentes no source_list oficial da TV no HA
+        if (isTvCmd && Array.isArray(mp.attributes?.source_list)) {
+          const matchedSource = mp.attributes.source_list.find((s) => {
+            const l = String(s).toLowerCase().trim()
+            return l === 'tv' || l === 'live tv' || l === 'tv ao vivo' || l === 'dtv' || l === 'tv/dtv' || l === 'antenna' || l === 'tuner' || l === 'sintonizador'
+          })
+          if (matchedSource) {
+            try {
+              await this._post('/api/services/media_player/select_source', { entity_id: mp.entity_id, source: matchedSource })
+              inputExecuted = true
+            } catch (e) {}
+          }
+        }
+      }
+
+      // 2. Tentar media_player.play_media com a URI passthrough e com.tcl.tv
       for (const mp of mediaPlayers) {
         try {
           await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: act })
           inputExecuted = true
         } catch (e) {}
+        if (isTvCmd) {
+          try {
+            await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: 'com.tcl.tv' })
+            inputExecuted = true
+          } catch (e) {}
+        }
       }
 
+      // 3. Tentar remote.turn_on com a activity passthrough no controle remoto
       for (const rm of remotes) {
         try {
           await this._post('/api/services/remote/turn_on', { entity_id: rm.entity_id, activity: act })
           inputExecuted = true
         } catch (e) {}
+
+        // 4. Tentar remote.send_command com comandos universais de entrada de TV
+        for (const inputCmd of ['TV_INPUT', 'INPUT', 'TV', 'LIVE_TV']) {
+          try {
+            await this._post('/api/services/remote/send_command', { entity_id: rm.entity_id, command: [inputCmd] })
+            inputExecuted = true
+          } catch (e) {}
+        }
       }
 
       if (inputExecuted) return { success: true }

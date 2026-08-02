@@ -505,6 +505,8 @@ function DeviceControlCardContent({
       }
     }
     const inputActivityMap = {
+      "TV": "passthrough://media_0",
+      "TV1": "passthrough://media_0",
       "HDMI 1": "passthrough://media_1",
       "HDMI1": "passthrough://media_1",
       "HDMI 2": "passthrough://media_2",
@@ -513,8 +515,35 @@ function DeviceControlCardContent({
       "HDMI3": "passthrough://media_3",
       "AV": "passthrough://media_av"
     };
-    if (inputActivityMap[cmdUpper]) {
-      const act = inputActivityMap[cmdUpper];
+    const isTvCmd = cmdUpper === "TV" || cmdUpper === "TV1" || cmdUpper === "LIVE TV" || cmdUpper === "TV AO VIVO";
+    const isInputCmd = Boolean(inputActivityMap[cmdUpper]) || isTvCmd;
+    if (isInputCmd) {
+      const act = inputActivityMap[cmdUpper] || "passthrough://media_0";
+      try {
+        await executeService("media_player", "select_source", { entity_id: targetId, source: command });
+      } catch (e) {
+      }
+      if (isTvCmd) {
+        const sourceList = device.attributes?.source_list || currentDevice.attributes?.source_list || [];
+        const matchedSource = sourceList.find((s) => {
+          const l = String(s).toLowerCase().trim();
+          return l === "tv" || l === "live tv" || l === "tv ao vivo" || l === "dtv" || l === "tv/dtv" || l === "antenna" || l === "tuner" || l === "sintonizador";
+        });
+        if (matchedSource) {
+          try {
+            await executeService("media_player", "select_source", { entity_id: targetId, source: matchedSource });
+          } catch (e) {
+          }
+        }
+        try {
+          await executeService("media_player", "play_media", {
+            entity_id: targetId,
+            media_content_type: "app",
+            media_content_id: "com.tcl.tv"
+          });
+        } catch (e) {
+        }
+      }
       const chromecastMedia = effectiveAllDevices.find((d) => d.domain === "media_player" && d.id !== targetId);
       const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId;
       try {
@@ -523,7 +552,6 @@ function DeviceControlCardContent({
           media_content_type: "app",
           media_content_id: act
         });
-        return;
       } catch (e) {
       }
       try {
@@ -532,9 +560,31 @@ function DeviceControlCardContent({
           media_content_type: "app",
           media_content_id: act
         });
-        return;
       } catch (e) {
       }
+      const candidateRemote2 = effectiveAllDevices.find((d) => d.domain === "remote");
+      if (candidateRemote2) {
+        try {
+          await executeService("remote", "turn_on", {
+            entity_id: candidateRemote2.id,
+            activity: act
+          });
+        } catch (e) {
+        }
+      }
+      const remoteTargetId2 = candidateRemote2?.id || (domain === "media_player" ? targetId.replace("media_player.", "remote.") : null);
+      if (remoteTargetId2) {
+        for (const inputCmd of ["TV_INPUT", "INPUT", "TV", "LIVE_TV"]) {
+          try {
+            await executeService("remote", "send_command", {
+              entity_id: remoteTargetId2,
+              command: [inputCmd]
+            });
+          } catch (e) {
+          }
+        }
+      }
+      return;
     }
     const androidTvCommandMap = {
       UP: ["DPAD_UP", "UP"],

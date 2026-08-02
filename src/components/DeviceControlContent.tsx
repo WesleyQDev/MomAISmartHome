@@ -553,8 +553,10 @@ export function DeviceControlCardContent({
       } catch (e) {}
     }
 
-    // 3. Suporte às Entradas HDMI 1, HDMI 2, HDMI 3 e AV
+    // 3. Suporte às Entradas TV, HDMI 1, HDMI 2, HDMI 3 e AV
     const inputActivityMap: Record<string, string> = {
+      'TV': 'passthrough://media_0',
+      'TV1': 'passthrough://media_0',
       'HDMI 1': 'passthrough://media_1',
       'HDMI1': 'passthrough://media_1',
       'HDMI 2': 'passthrough://media_2',
@@ -564,11 +566,42 @@ export function DeviceControlCardContent({
       'AV': 'passthrough://media_av'
     }
 
-    if (inputActivityMap[cmdUpper]) {
-      const act = inputActivityMap[cmdUpper]
+    const isTvCmd = cmdUpper === 'TV' || cmdUpper === 'TV1' || cmdUpper === 'LIVE TV' || cmdUpper === 'TV AO VIVO'
+    const isInputCmd = Boolean(inputActivityMap[cmdUpper]) || isTvCmd
 
-      // Tentar no media_player.tv_thucos (Chromecast / Google TV entity)
-      const chromecastMedia = effectiveAllDevices.find(d => d.domain === 'media_player' && d.id !== targetId)
+    if (isInputCmd) {
+      const act = inputActivityMap[cmdUpper] || 'passthrough://media_0'
+
+      // 3a. Tentar media_player.select_source com a string exata do comando (ex: 'TV', 'HDMI 1', etc.)
+      try {
+        await executeService('media_player', 'select_source', { entity_id: targetId, source: command })
+      } catch (e) {}
+
+      // 3b. Se for comando de TV, procurar no source_list da entidade por termos equivalentes a TV ao vivo
+      if (isTvCmd) {
+        const sourceList = (device.attributes?.source_list as string[]) || (currentDevice.attributes?.source_list as string[]) || []
+        const matchedSource = sourceList.find((s) => {
+          const l = String(s).toLowerCase().trim()
+          return l === 'tv' || l === 'live tv' || l === 'tv ao vivo' || l === 'dtv' || l === 'tv/dtv' || l === 'antenna' || l === 'tuner' || l === 'sintonizador'
+        })
+        if (matchedSource) {
+          try {
+            await executeService('media_player', 'select_source', { entity_id: targetId, source: matchedSource })
+          } catch (e) {}
+        }
+
+        // Tentar app sintonizador de TV do TCL / Google TV / Android TV
+        try {
+          await executeService('media_player', 'play_media', {
+            entity_id: targetId,
+            media_content_type: 'app',
+            media_content_id: 'com.tcl.tv'
+          })
+        } catch (e) {}
+      }
+
+      // 3c. Tentar media_player.play_media com a URI passthrough
+      const chromecastMedia = effectiveAllDevices.find((d) => d.domain === 'media_player' && d.id !== targetId)
       const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId
 
       try {
@@ -577,7 +610,6 @@ export function DeviceControlCardContent({
           media_content_type: 'app',
           media_content_id: act
         })
-        return
       } catch (e) {}
 
       try {
@@ -586,8 +618,33 @@ export function DeviceControlCardContent({
           media_content_type: 'app',
           media_content_id: act
         })
-        return
       } catch (e) {}
+
+      // 3d. Tentar remote.turn_on com a activity passthrough no controle remoto
+      const candidateRemote = effectiveAllDevices.find((d) => d.domain === 'remote')
+      if (candidateRemote) {
+        try {
+          await executeService('remote', 'turn_on', {
+            entity_id: candidateRemote.id,
+            activity: act
+          })
+        } catch (e) {}
+      }
+
+      // 3e. Tentar remote.send_command com comandos universais de entrada de TV
+      const remoteTargetId = candidateRemote?.id || (domain === 'media_player' ? targetId.replace('media_player.', 'remote.') : null)
+      if (remoteTargetId) {
+        for (const inputCmd of ['TV_INPUT', 'INPUT', 'TV', 'LIVE_TV']) {
+          try {
+            await executeService('remote', 'send_command', {
+              entity_id: remoteTargetId,
+              command: [inputCmd]
+            })
+          } catch (e) {}
+        }
+      }
+
+      return
     }
 
     // Mapeamento universal de comandos para Android TV
