@@ -561,23 +561,21 @@ export default function SmartHomePage() {
     setLoading(true)
     try {
       const status = await api.getStatus()
-      setIsConnected(Boolean(status.connected && status.connections?.length > 0))
       const conns = await api.listConnections()
       setConnections(conns)
       await fetchLastConnection()
 
-      if (status.connected && conns.length > 0) {
-        const devs = await api.getDevices()
-        const deduplicated = deduplicateDevicesByName(devs)
-        setDevices(deduplicated)
-      } else {
-        setIsConnected(false)
-        setDevices([])
-      }
+      const hasConnections = Array.isArray(conns) && conns.length > 0
+      setIsConnected(Boolean(status?.connected || hasConnections))
+
+      const devs = await api.getDevices()
+      const deduplicated = deduplicateDevicesByName(devs || [])
+      setDevices(deduplicated)
     } catch (err) {
       console.warn('[SmartHome] Erro ao carregar status:', err)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const openConnectModal = async () => {

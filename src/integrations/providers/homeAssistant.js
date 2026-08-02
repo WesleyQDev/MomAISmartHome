@@ -127,20 +127,29 @@ class HomeAssistantProvider extends BaseProvider {
       const ws = new WebSocket(wsUrl)
       this.ws = ws
 
-      ws.on('error', (err) => {
+      const on = (event, listener) => {
+        if (typeof ws.on === 'function') {
+          ws.on(event, listener)
+        } else if (typeof ws.addEventListener === 'function') {
+          ws.addEventListener(event, (e) => listener(e.data || e))
+        }
+      }
+
+      on('error', (err) => {
         const msg = err?.message || String(err || '')
         if (!msg.includes('closed before the connection was established')) {
           console.warn('[HAProvider] Erro no WebSocket:', msg)
         }
       })
 
-      ws.on('open', () => {
+      on('open', () => {
         // Aguarda mensagem 'auth_required' enviada pelo servidor HA
       })
 
-      ws.on('message', (raw) => {
+      on('message', (raw) => {
         try {
-          const msg = JSON.parse(raw.toString())
+          const data = typeof raw === 'string' ? raw : (raw?.data || raw.toString())
+          const msg = JSON.parse(data)
           this._handleWsMessage(msg)
         } catch (err) {
           console.warn('[HAProvider] Erro ao processar mensagem do WebSocket:', err.message)
@@ -211,6 +220,9 @@ class HomeAssistantProvider extends BaseProvider {
         this._connectWebSocket()
       }
     }, 5000)
+    if (this.wsReconnectTimer && typeof this.wsReconnectTimer.unref === 'function') {
+      this.wsReconnectTimer.unref()
+    }
   }
 
   _closeWebSocket(resetConnected = true) {
@@ -222,7 +234,9 @@ class HomeAssistantProvider extends BaseProvider {
       const socket = this.ws
       this.ws = null
       try {
-        socket.on('error', () => {})
+        if (typeof socket.on === 'function') {
+          socket.on('error', () => {})
+        }
         if (typeof socket.terminate === 'function') {
           socket.terminate()
         } else if (typeof socket.close === 'function') {
@@ -237,6 +251,7 @@ class HomeAssistantProvider extends BaseProvider {
 
   _get(urlPath) {
     return new Promise((resolve, reject) => {
+      let settled = false
       const parsedUrl = new URL(urlPath, this.url.replace(/\/$/, ''))
       const isHttps = parsedUrl.protocol === 'https:'
       const transport = isHttps ? https : http
@@ -256,6 +271,9 @@ class HomeAssistantProvider extends BaseProvider {
           let body = ''
           res.on('data', (chunk) => (body += chunk))
           res.on('end', () => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
             if (res.statusCode >= 200 && res.statusCode < 300) {
               try { resolve(JSON.parse(body)) } catch { resolve(null) }
             } else {
@@ -264,14 +282,27 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
-      req.setTimeout(4000, () => req.destroy(new Error('Tempo limite ao consultar o Home Assistant')))
-      req.on('error', reject)
+
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        req.destroy(new Error('Tempo limite ao consultar o Home Assistant'))
+      }, 4000)
+
+      req.on('error', (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(err)
+      })
+
       req.end()
     })
   }
 
   _post(urlPath, payload = {}) {
     return new Promise((resolve, reject) => {
+      let settled = false
       const parsedUrl = new URL(urlPath, this.url.replace(/\/$/, ''))
       const isHttps = parsedUrl.protocol === 'https:'
       const transport = isHttps ? https : http
@@ -291,6 +322,9 @@ class HomeAssistantProvider extends BaseProvider {
           let body = ''
           res.on('data', (chunk) => (body += chunk))
           res.on('end', () => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
             if (res.statusCode >= 200 && res.statusCode < 300) {
               try { resolve(JSON.parse(body)) } catch { resolve(null) }
             } else {
@@ -299,8 +333,20 @@ class HomeAssistantProvider extends BaseProvider {
           })
         }
       )
-      req.setTimeout(4000, () => req.destroy(new Error('Tempo limite ao chamar o Home Assistant')))
-      req.on('error', reject)
+
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        req.destroy(new Error('Tempo limite ao chamar o Home Assistant'))
+      }, 4000)
+
+      req.on('error', (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(err)
+      })
+
       req.write(postData)
       req.end()
     })
@@ -335,7 +381,15 @@ class HomeAssistantProvider extends BaseProvider {
   }
 
   async listDevices() {
-    if (!this.connected) return []
+    if (!this.connected && this.url && this.token) {
+      try {
+        await this.connect()
+      } catch {}
+    }
+
+    if (!this.connected) {
+      return Array.from(this.cachedDevices.values())
+    }
 
     try {
       const states = await this._get('/api/states')

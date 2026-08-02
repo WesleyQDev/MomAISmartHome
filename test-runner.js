@@ -212,6 +212,34 @@ async function runTests() {
     closedWithoutError = false
   }
   assert('Encerrar WebSocket em estado CONNECTING não lança erro não tratado', closedWithoutError)
+  await provider.disconnect()
+
+  // Test 11: Resiliência de descriptografia entre instâncias do TokenManager
+  const tm2 = new TokenManager(db)
+  await tm2.saveConnection('test_persist', 'homeassistant', { url: 'http://ha.local:8123', token: 'secret_token_123' }, 'Persist HA', 'local')
+  const tm3 = new TokenManager(db)
+  const connPersist = await tm3.getConnection('test_persist')
+  assert('TokenManager recupera e descriptografa conexão em nova instância', connPersist && connPersist.config && connPersist.config.token === 'secret_token_123')
+
+  // Test 12: listDevices tenta reconectar quando provido de URL e Token mas desconnectado
+  const offlineProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  offlineProvider.connected = false
+  let connectAttempted = false
+  offlineProvider.connect = async () => {
+    connectAttempted = true
+    offlineProvider.connected = true
+    offlineProvider.cachedDevices.set('light.reconnect', { id: 'light.reconnect', name: 'Luz Reconectada' })
+    return { success: true }
+  }
+  const offlineDevs = await offlineProvider.listDevices()
+  assert('listDevices reconecta automaticamente se desconectado', connectAttempted && offlineDevs.length > 0 && offlineDevs[0].id === 'light.reconnect')
+  await offlineProvider.disconnect()
+
+  // Test 13: list_devices em runtime.js indica erro quando sem conexão
+  MomAIHomeConnector.isConnected = false
+  MomAIHomeConnector.devices.providers.clear()
+  const listErrRes = await runtime.executeTool('list_devices', {}, mockMomai)
+  assert('list_devices retorna erro descritivo quando desconectado', listErrRes && listErrRes.ok === false && typeof listErrRes.error === 'string')
 
   await db.close()
   console.log(`\n=== Resultado: ${passed} passaram, ${failed} falharam ===`)

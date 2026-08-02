@@ -14,7 +14,8 @@ let ready = false
 
 async function init() {
   try {
-    await connector.init()
+    const momaiObj = (typeof momai !== 'undefined' && momai) ? momai : { storage: { storageDir: dataDir } }
+    await connector.init(momaiObj)
     ready = true
     if (typeof process.send === 'function') process.send({ type: 'ready' })
   } catch (err) {
@@ -64,11 +65,12 @@ async function refreshDeviceCache() {
 }
 
 // Background sync interval (every 15s) to discover new devices automatically
-setInterval(async () => {
+const syncInterval = setInterval(async () => {
   if (ready) {
     await refreshDeviceCache().catch(() => {})
   }
 }, 15000)
+if (typeof syncInterval.unref === 'function') syncInterval.unref()
 
 const tools = module.exports.tools = [
   {
@@ -243,11 +245,12 @@ const tools = module.exports.tools = [
   }
 ]
 
-setInterval(() => {
+const hbInterval = setInterval(() => {
   if (typeof process.send === 'function') {
     process.send({ type: 'heartbeat', timestamp: Date.now() })
   }
 }, 30000)
+if (typeof hbInterval.unref === 'function') hbInterval.unref()
 
 init()
 
@@ -268,6 +271,10 @@ process.on('message', async (msg) => {
   } else if (msg.type === 'shutdown') {
     process.exit(0)
   }
+})
+
+process.on('disconnect', () => {
+  process.exit(0)
 })
 
 function normalizeString(str) {
@@ -351,9 +358,9 @@ async function matchDevice(query, momai) {
 async function executeTool(toolName, args, momai) {
   if (typeof toolName === 'object' && toolName !== null) {
     const opts = toolName
-    toolName = opts.toolName || opts.name
-    args = opts.args || opts.parameters || {}
-    momai = opts.momai || momai
+    toolName = opts.toolName || opts.name || opts.tool
+    args = opts.args || opts.parameters || opts.payload?.args || {}
+    momai = opts.momai || opts.context || opts.payload?.context || momai
   }
   args = args || {}
 
@@ -366,12 +373,17 @@ async function executeTool(toolName, args, momai) {
       if (!args.device_name || !args.action) {
         const all = await connector.getDevices().catch(() => [])
         const names = all.map((d) => d.name).join(', ')
-        return { ok: false, error: `Informe device_name e action. Dispositivos disponíveis: ${names || 'Nenhum conectado'}` }
+        return {
+          ok: false,
+          error: `Informe device_name e action. Dispositivos disponíveis: ${names || 'Nenhum conectado'}`,
+          instruction: `Erro: Informe device_name e action. Dispositivos disponíveis: ${names || 'Nenhum conectado'}`
+        }
       }
       const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
+        const errorMsg = `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
       let result
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
@@ -388,17 +400,20 @@ async function executeTool(toolName, args, momai) {
       }
       await refreshDeviceCache()
       if (result && result.success === false) {
-        return { ok: false, error: `Falha ao ${args.action === 'on' ? 'ligar' : 'desligar'} "${device.name}": ${result.error || 'erro desconhecido'}` }
+        const errorMsg = `Falha ao ${args.action === 'on' ? 'ligar' : 'desligar'} "${device.name}": ${result.error || 'erro desconhecido'}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
-      return { ok: true, device: device.name, action: args.action, result }
+      const successMsg = `Dispositivo "${device.name}" foi ${args.action === 'on' ? 'ligado' : args.action === 'off' ? 'desligado' : 'alternado'} com sucesso.`
+      return { ok: true, device: device.name, action: args.action, result, instruction: successMsg }
     }
 
     case 'set_light_color': {
-      if (!args.device_name) return { ok: false, error: 'Informe device_name' }
+      if (!args.device_name) return { ok: false, error: 'Informe device_name', instruction: 'Informe device_name' }
       const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
+        const errorMsg = `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
       const result = await connector.turnOnDevice(device.id, provider, {
@@ -407,16 +422,18 @@ async function executeTool(toolName, args, momai) {
         color_temp: args.color_temp
       })
       await refreshDeviceCache()
-      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao atualizar a luz' }
-      return { ok: true, device: device.name, result }
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao atualizar a luz', instruction: result.error || 'Falha ao atualizar a luz' }
+      const successMsg = `Luz "${device.name}" ajustada com sucesso.`
+      return { ok: true, device: device.name, result, instruction: successMsg }
     }
 
     case 'control_tv_remote': {
-      if (!args.device_name) return { ok: false, error: 'Informe device_name' }
+      if (!args.device_name) return { ok: false, error: 'Informe device_name', instruction: 'Informe device_name' }
       const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
+        const errorMsg = `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
       let result
@@ -425,46 +442,69 @@ async function executeTool(toolName, args, momai) {
       } else if (args.action) {
         result = await connector.controlMedia(device.id, args.action, args.value, provider)
       } else {
-        return { ok: false, error: 'Informe command ou action' }
+        return { ok: false, error: 'Informe command ou action', instruction: 'Informe command ou action' }
       }
-      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a mídia' }
-      return { ok: true, device: device.name, result }
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a mídia', instruction: result.error || 'Falha ao controlar a mídia' }
+      const successMsg = `Comando enviado para a TV/Media "${device.name}" com sucesso.`
+      return { ok: true, device: device.name, result, instruction: successMsg }
     }
 
     case 'control_climate': {
-      if (!args.device_name) return { ok: false, error: 'Informe device_name' }
+      if (!args.device_name) return { ok: false, error: 'Informe device_name', instruction: 'Informe device_name' }
       const device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices()
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}` }
+        const errorMsg = `Dispositivo "${args.device_name}" não encontrado. Disponíveis: ${all.map((d) => d.name).join(', ')}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
       const provider = device.provider?.toLowerCase().replace(/\s+/g, '')
       const result = await connector.setClimate(device.id, args.temperature, args.hvac_mode, provider)
-      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a climatização' }
-      return { ok: true, device: device.name, result }
+      if (result && result.success === false) return { ok: false, error: result.error || 'Falha ao controlar a climatização', instruction: result.error || 'Falha ao controlar a climatização' }
+      const successMsg = `Climatização do dispositivo "${device.name}" ajustada com sucesso.`
+      return { ok: true, device: device.name, result, instruction: successMsg }
     }
 
     case 'call_ha_service': {
-      if (!args.domain || !args.service) return { ok: false, error: 'Informe domain e service' }
+      if (!args.domain || !args.service) return { ok: false, error: 'Informe domain e service', instruction: 'Informe domain e service' }
       const result = await connector.callService(args.domain, args.service, args.data || {})
-      return { ok: true, result }
+      const successMsg = `Serviço ${args.domain}.${args.service} executado com sucesso.`
+      return { ok: true, result, instruction: successMsg }
     }
 
     case 'list_devices': {
+      await connector.ensureConnected(momai).catch(() => {})
       const devices = await connector.getDevices(args.connectionId)
+      if ((!devices || devices.length === 0) && !connector.isConnected) {
+        const conns = await connector.listConnections().catch(() => [])
+        if (conns.length === 0) {
+          return {
+            ok: false,
+            error: 'Nenhuma conexão do Home Assistant configurada. Configure a integração no painel.',
+            instruction: 'Erro: Nenhuma conexão do Home Assistant configurada. Por favor, adicione sua URL e Token no painel do MomAI Smart Home.'
+          }
+        }
+        return {
+          ok: false,
+          error: 'Falha ao conectar com o Home Assistant. Verifique a URL e o token de acesso.',
+          instruction: 'Erro: Não foi possível se conectar ao Home Assistant. Verifique a URL, token ou status da rede.'
+        }
+      }
       const filtered = args.room ? devices.filter((d) => d.room?.toLowerCase() === args.room.toLowerCase()) : devices
+      const list = filtered.map((d) => ({
+        name: d.name,
+        id: d.id,
+        type: d.domain,
+        room: d.room || null,
+        state: d.state.on ? 'on' : 'off',
+        value: d.domain === 'sensor' ? d.state.value : null,
+        temperature: d.state.temperature || d.state.targetTemperature || null,
+        brightness: d.state.brightness || null
+      }))
+      const textList = list.map((d) => `- ${d.name} (${d.type}, estado: ${d.state}${d.room ? ', cômodo: ' + d.room : ''})`).join('\n')
       return {
         ok: true,
-        devices: filtered.map((d) => ({
-          name: d.name,
-          id: d.id,
-          type: d.domain,
-          room: d.room || null,
-          state: d.state.on ? 'on' : 'off',
-          value: d.domain === 'sensor' ? d.state.value : null,
-          temperature: d.state.temperature || d.state.targetTemperature || null,
-          brightness: d.state.brightness || null
-        }))
+        devices: list,
+        instruction: `Aqui estão os ${list.length} dispositivos encontrados:\n${textList}\nResponda apresentando essa lista ao usuário de forma clara.`
       }
     }
 
@@ -473,9 +513,10 @@ async function executeTool(toolName, args, momai) {
       if (!device) {
         const all = await connector.getDevices().catch(() => [])
         const names = all.map((d) => d.name).join(', ')
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado.${names ? ' Disponíveis: ' + names : ''}` }
+        const errorMsg = `Dispositivo "${args.device_name}" não encontrado.${names ? ' Disponíveis: ' + names : ''}`
+        return { ok: false, error: errorMsg, instruction: errorMsg }
       }
-      return { ok: true, device }
+      return { ok: true, device, instruction: JSON.stringify({ ok: true, device }) }
     }
 
     case 'open_device_control': {
@@ -544,11 +585,13 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'getDevices': {
+      await connector.ensureConnected(momai).catch(() => {})
       const devices = await connector.getDevices(args.connectionId)
       return { ok: true, devices }
     }
 
     case 'syncDevices': {
+      await connector.ensureConnected(momai).catch(() => {})
       const devices = (typeof connector.syncDevices === 'function') ? await connector.syncDevices(args.connectionId) : await connector.getDevices(args.connectionId)
       await refreshDeviceCache()
       return { ok: true, devices }
@@ -589,7 +632,7 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'getStatus': {
-      const status = connector.getStatus()
+      const status = await connector.getStatus(momai)
       return { ok: true, ...status }
     }
 

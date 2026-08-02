@@ -29,8 +29,14 @@ class DeviceManager extends EventEmitter {
       });
     }
 
-    const result = await provider.connect();
     this.providers.set(type, provider);
+    let result;
+    try {
+      result = await provider.connect();
+    } catch (err) {
+      console.warn(`[DeviceManager] Connect offline/error for ${type}:`, err.message);
+      result = { success: false, error: err.message };
+    }
     return result;
   }
 

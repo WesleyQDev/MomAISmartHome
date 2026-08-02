@@ -35,6 +35,9 @@ class MomAIHomeConnector extends EventEmitter {
         await this.dbManager.close();
       }
       this.dbManager.dbPath = customDbPath;
+      if (this.tokenManager && typeof this.tokenManager.reloadKey === 'function') {
+        this.tokenManager.reloadKey(momai.storage.storageDir);
+      }
     }
     await this.dbManager.init();
     const conns = await this.tokenManager.listConnections();
@@ -42,14 +45,20 @@ class MomAIHomeConnector extends EventEmitter {
     for (const conn of conns) {
       try {
         const full = await this.tokenManager.getConnection(conn.id);
-        if (!full) continue;
+        if (!full || !full.config) continue;
 
-        const result = await this.devices.registerProvider(full.providerType, full.config);
-        if (result.success) {
-          if (!this.connections.some((c) => c.id === full.id)) {
-            this.connections.push({ id: full.id, type: full.providerType, name: full.name, email: full.email });
+        try {
+          const regRes = await this.devices.registerProvider(full.providerType, full.config);
+          if (regRes && regRes.success !== false) {
+            if (!this.connections.some((c) => c.id === full.id)) {
+              this.connections.push({ id: full.id, type: full.providerType, name: full.name, email: full.email });
+            }
+            this.isConnected = true;
+          } else {
+            console.warn(`[MomAIHomeConnector] Provider ${conn.id} ignorado por falha na conexão:`, regRes?.error);
           }
-          this.isConnected = true;
+        } catch (regErr) {
+          console.warn(`[MomAIHomeConnector] Erro ao registrar provider para ${conn.id}:`, regErr.message);
         }
       } catch (err) {
         console.warn(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}:`, err.message);
@@ -60,7 +69,8 @@ class MomAIHomeConnector extends EventEmitter {
   }
 
   async ensureConnected(momai) {
-    if (this.isConnected && this.connections.length > 0) {
+    const status = this.devices.getStatus();
+    if (this.isConnected && this.connections.length > 0 && status.connected) {
       return this.getStatus();
     }
 
@@ -70,6 +80,9 @@ class MomAIHomeConnector extends EventEmitter {
           const customDbPath = path.join(momai.storage.storageDir, 'smarthome.sqlite');
           if (this.dbManager.dbPath !== customDbPath) {
             this.dbManager.dbPath = customDbPath;
+          }
+          if (this.tokenManager && typeof this.tokenManager.reloadKey === 'function') {
+            this.tokenManager.reloadKey(momai.storage.storageDir);
           }
         }
 
@@ -89,12 +102,14 @@ class MomAIHomeConnector extends EventEmitter {
           }
           for (const conn of entries) {
             if (!conn?.url || !conn.token) continue;
-            const result = await this.devices.registerProvider(conn.type || 'homeassistant', { url: conn.url, token: conn.token });
-            if (result.success) {
-              if (!this.connections.some((c) => c.id === conn.id)) {
-                this.connections.push({ id: conn.id, type: conn.type || 'homeassistant', name: conn.name || 'Home Assistant', email: conn.email || 'local' });
-              }
+            if (!this.connections.some((c) => c.id === conn.id)) {
+              this.connections.push({ id: conn.id, type: conn.type || 'homeassistant', name: conn.name || 'Home Assistant', email: conn.email || 'local' });
+            }
+            try {
+              await this.devices.registerProvider(conn.type || 'homeassistant', { url: conn.url, token: conn.token });
               await this.tokenManager.saveConnection(conn.id, conn.type || 'homeassistant', { url: conn.url, token: conn.token }, conn.name || 'Home Assistant', conn.email || 'local');
+              this.isConnected = true;
+            } catch (regErr) {
               this.isConnected = true;
             }
           }
@@ -104,7 +119,8 @@ class MomAIHomeConnector extends EventEmitter {
       }
     }
 
-    if (!this.isConnected) {
+    if (!this._initialized || this.connections.length === 0) {
+      this._initialized = true;
       await this.init(momai).catch(() => {});
     }
 
@@ -125,11 +141,12 @@ class MomAIHomeConnector extends EventEmitter {
       this.dbManager.dbPath = customDbPath;
     }
     await this.dbManager.init();
-    this.auth.setCredentials(url, token);
-
-    const connectionId = 'ha_' + Date.now();
     const displayName = name || 'Home Assistant';
 
+    // Desconecta e remove conexões antigas do mesmo tipo para manter apenas a conexão ativa
+    await this.disconnectAll(momai).catch(() => {});
+
+    const connectionId = 'ha_' + Date.now();
     const result = await this.devices.registerProvider('homeassistant', { url, token });
 
     await this.tokenManager.saveConnection(
@@ -203,7 +220,16 @@ class MomAIHomeConnector extends EventEmitter {
 
   async getDevices(connectionId) {
     const status = this.devices.getStatus();
-    if (Object.keys(status.providers).length === 0) return [];
+    if (Object.keys(status.providers).length === 0) {
+      try {
+        const conns = await this.tokenManager.listConnections();
+        if (conns.length > 0) {
+          const cached = await this.tokenManager.getCachedEntities(connectionId || conns[0].id);
+          if (cached && cached.length > 0) return cached;
+        }
+      } catch {}
+      return [];
+    }
 
     if (connectionId) {
       const conn = this.connections.find((c) => c.id === connectionId);
@@ -211,7 +237,17 @@ class MomAIHomeConnector extends EventEmitter {
       return [];
     }
 
-    return this.devices.listDevices();
+    const devices = await this.devices.listDevices();
+    if ((!devices || devices.length === 0)) {
+      try {
+        const conns = await this.tokenManager.listConnections();
+        for (const c of conns) {
+          const cached = await this.tokenManager.getCachedEntities(c.id);
+          if (cached && cached.length > 0) return cached;
+        }
+      } catch {}
+    }
+    return devices;
   }
 
   async syncDevices(connectionId) {

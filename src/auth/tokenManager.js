@@ -11,16 +11,38 @@ class TokenManager {
     this.encryptionSecret = process.env.ENCRYPTION_KEY || this._loadOrCreateKey();
   }
 
-  _loadOrCreateKey() {
-    try {
-      const existing = fs.readFileSync(ENCRYPTION_KEY_PATH, 'utf8').trim();
-      if (existing) return existing;
-    } catch {}
+  _loadOrCreateKey(customDir) {
+    const candidatePaths = [
+      customDir ? path.join(customDir, '.encryption-key') : null,
+      ENCRYPTION_KEY_PATH,
+      path.join(require('../config/constants').DEFAULT_DB_PATH, '..', '.encryption-key'),
+      path.join(__dirname, '..', '..', 'data', '.encryption-key')
+    ].filter(Boolean);
 
+    for (const keyPath of candidatePaths) {
+      try {
+        if (fs.existsSync(keyPath)) {
+          const existing = fs.readFileSync(keyPath, 'utf8').trim();
+          if (existing) return existing;
+        }
+      } catch {}
+    }
+
+    const keyPath = candidatePaths[0];
     const key = crypto.randomBytes(32).toString('hex');
-    fs.mkdirSync(path.dirname(ENCRYPTION_KEY_PATH), { recursive: true });
-    fs.writeFileSync(ENCRYPTION_KEY_PATH, key, { encoding: 'utf8', mode: 0o600 });
+    try {
+      fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+      fs.writeFileSync(keyPath, key, { encoding: 'utf8', mode: 0o600 });
+    } catch {}
     return key;
+  }
+
+  reloadKey(customDir) {
+    if (process.env.ENCRYPTION_KEY) {
+      this.encryptionSecret = process.env.ENCRYPTION_KEY;
+    } else {
+      this.encryptionSecret = this._loadOrCreateKey(customDir);
+    }
   }
 
   _getKey() {
@@ -84,35 +106,73 @@ class TokenManager {
 
     if (!row) return null;
 
-    let config;
+    let config = null;
     let migrated = false;
     try {
       const encryptedPayload = JSON.parse(row.config_encrypted);
-      try {
-        config = this.decrypt(encryptedPayload);
-      } catch {
-        // Re-encrypt records created before per-install keys were introduced.
-        config = this.decrypt(encryptedPayload, LEGACY_ENCRYPTION_KEY);
+      if (encryptedPayload && encryptedPayload.encryptedData && encryptedPayload.iv && encryptedPayload.authTag) {
+        try {
+          config = this.decrypt(encryptedPayload);
+        } catch {
+          const candidateKeys = [
+            ENCRYPTION_KEY_PATH,
+            path.join(require('../config/constants').DEFAULT_DB_PATH, '..', '.encryption-key'),
+            path.join(__dirname, '..', '..', 'data', '.encryption-key')
+          ];
+          for (const kPath of candidateKeys) {
+            try {
+              if (fs.existsSync(kPath)) {
+                const fileKey = fs.readFileSync(kPath, 'utf8').trim();
+                if (fileKey) {
+                  config = this.decrypt(encryptedPayload, fileKey);
+                  migrated = true;
+                  break;
+                }
+              }
+            } catch {}
+          }
+          if (!config) {
+            try {
+              config = this.decrypt(encryptedPayload, LEGACY_ENCRYPTION_KEY);
+              migrated = true;
+            } catch {}
+          }
+        }
+      } else if (encryptedPayload && typeof encryptedPayload === 'object' && (encryptedPayload.url || encryptedPayload.token)) {
+        config = encryptedPayload;
         migrated = true;
       }
-      if (migrated) {
+    } catch {
+      try {
+        if (typeof row.config_encrypted === 'string' && (row.config_encrypted.includes('http') || row.config_encrypted.includes('token'))) {
+          config = JSON.parse(row.config_encrypted);
+          migrated = true;
+        }
+      } catch {}
+    }
+
+    if (!config) {
+      console.error('[TokenManager] Erro ao descriptografar config da conexão', id);
+      return null;
+    }
+
+    if (migrated) {
+      try {
         await this.dbManager.run(
           `UPDATE connections SET config_encrypted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
           [JSON.stringify(this.encrypt(config)), id]
         );
-      }
-      return {
-        id: row.id,
-        providerType: row.provider_type,
-        name: row.name,
-        email: row.user_email,
-        config,
-        updatedAt: row.updated_at
-      };
-    } catch (err) {
-      console.error('[TokenManager] Erro ao descriptografar config da conexão:', err.message);
-      return null;
+      } catch {}
     }
+
+    return {
+      id: row.id,
+      providerType: row.provider_type,
+      name: row.name,
+      email: row.user_email,
+      config,
+      updatedAt: row.updated_at
+    };
   }
 
   async listConnections() {
@@ -122,9 +182,9 @@ class TokenManager {
 
   async removeConnection(id) {
     await this.dbManager.init();
-    await this.dbManager.run(`DELETE FROM connections WHERE id = ?`, [id]);
     await this.dbManager.run(`DELETE FROM cached_entities WHERE connection_id = ?`, [id]);
     await this.dbManager.run(`DELETE FROM rooms WHERE connection_id = ?`, [id]);
+    await this.dbManager.run(`DELETE FROM connections WHERE id = ?`, [id]);
   }
 
   async cacheEntities(connectionId, entities) {
