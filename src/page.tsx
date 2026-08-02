@@ -268,6 +268,7 @@ function formatEntityValue(value?: string | number | null, unit?: string, device
 }
 
 function DeviceControlModal({ device, allDevices, onClose, onToggle }: { device: Device; allDevices: Device[]; onClose: () => void; onToggle: (d: Device) => void }) {
+  const isMediaOrRemote = device.domain === 'media_player' || device.domain === 'remote'
   return (
     <div className="sh-modal-overlay" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}>
@@ -275,8 +276,14 @@ function DeviceControlModal({ device, allDevices, onClose, onToggle }: { device:
           device={device}
           allDevices={allDevices}
           onClose={onClose}
-          onToggle={onToggle}
-          callServiceApi={(domain, service, data, providerType) => api.callService(domain, service, data, providerType)}
+          onToggle={isMediaOrRemote ? undefined : onToggle}
+          callServiceApi={async (domain, service, serviceData, providerType) => {
+            const winApi = (window as any).api
+            if (typeof winApi?.callService === 'function') {
+              return winApi.callService(domain, service, serviceData, providerType || 'homeassistant')
+            }
+            return api.callService(domain, service, serviceData, providerType)
+          }}
           isOverlay={false}
         />
       </div>
@@ -909,7 +916,9 @@ export default function SmartHomePage() {
                   <div
                     key={device.id}
                     className={`sh-card ${device.state.on ? 'on' : ''} ${device.domain}`}
-                    onClick={() => setSelectedDevice(device)}
+                    onClick={() => {
+                      setSelectedDevice(device)
+                    }}
                   >
                     <div className="sh-card-header">
                       <div className="sh-icon">{dynamicSvgIcon}</div>

@@ -233,7 +233,17 @@ function DeviceControlCardContent({
   React2.useEffect(() => {
     setCurrentDevice(device);
   }, [device]);
-  const volumeDevice = currentDevice.domain === "media_player" ? currentDevice : allDevices.find((candidate) => candidate.domain === "media_player" && candidate.name === currentDevice.name) || currentDevice;
+  const effectiveAllDevices = React2.useMemo(() => {
+    const list = [...allDevices || []];
+    const rels = currentDevice.attributes?.relatedEntities || device.attributes?.relatedEntities || [];
+    for (const r of rels) {
+      if (r && r.id && !list.some((d) => d.id === r.id)) {
+        list.push(r);
+      }
+    }
+    return list;
+  }, [allDevices, currentDevice, device]);
+  const volumeDevice = currentDevice.domain === "media_player" ? currentDevice : effectiveAllDevices.find((candidate) => candidate.domain === "media_player" && (candidate.name.toLowerCase().trim() === currentDevice.name.toLowerCase().trim() || candidate.id === currentDevice.id)) || currentDevice;
   const [brightness, setBrightnessState] = useState(currentDevice.state?.brightness ?? 94);
   const [tempPct, setTempPctState] = useState(85);
   const [activeTab, setActiveTab] = useState("brightness");
@@ -477,7 +487,7 @@ function DeviceControlCardContent({
         if (res?.success !== false && res?.ok !== false) return;
       } catch (e) {
       }
-      const candidateRemote2 = allDevices.find((d) => d.domain === "remote" && (d.id.includes("tv") || d.name.toLowerCase().includes("tv")));
+      const candidateRemote2 = effectiveAllDevices.find((d) => d.domain === "remote");
       if (candidateRemote2) {
         try {
           const res = await executeService("remote", "turn_on", {
@@ -505,7 +515,7 @@ function DeviceControlCardContent({
     };
     if (inputActivityMap[cmdUpper]) {
       const act = inputActivityMap[cmdUpper];
-      const chromecastMedia = allDevices.find((d) => d.domain === "media_player" && d.id !== targetId && d.id.includes("tv"));
+      const chromecastMedia = effectiveAllDevices.find((d) => d.domain === "media_player" && d.id !== targetId);
       const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId;
       try {
         await executeService("media_player", "play_media", {
@@ -536,7 +546,7 @@ function DeviceControlCardContent({
       HOME: ["HOME"]
     };
     const candidates = androidTvCommandMap[cmdUpper] || [cmdUpper];
-    const candidateRemote = allDevices.find((d) => d.domain === "remote" && (d.id.includes("tv") || d.name.toLowerCase().includes("tv")));
+    const candidateRemote = effectiveAllDevices.find((d) => d.domain === "remote");
     const remoteTargetId = domain === "remote" ? targetId : candidateRemote?.id || (domain === "media_player" ? targetId.replace("media_player.", "remote.") : null);
     if (remoteTargetId) {
       for (const cmdCandidate of candidates) {
@@ -597,7 +607,7 @@ function DeviceControlCardContent({
     await executeService("media_player", direction === "up" ? "volume_up" : "volume_down", { entity_id: volumeDevice.id });
   };
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, "#ffffff");
-  if (device.domain === "remote" || device.domain === "media_player" && (device.name.toLowerCase().includes("tv") || device.attributes?.deviceClass === "tv")) {
+  if (device.domain === "remote" || device.domain === "media_player") {
     const rawSources = device.attributes?.source_list || currentDevice.attributes?.source_list;
     const defaultSources = ["TV", "HDMI 1", "HDMI 2", "AV"];
     const baseSources = Array.isArray(rawSources) && rawSources.length > 0 ? rawSources : defaultSources;

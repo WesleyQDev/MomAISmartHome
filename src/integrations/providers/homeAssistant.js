@@ -573,29 +573,16 @@ class HomeAssistantProvider extends BaseProvider {
       const act = inputActivityMap[cmdUpper]
       let inputExecuted = false
 
-      // 1. Tenta enviar TV_INPUT para o remote (exibe/alterna o menu de entradas na TV física)
-      for (const rm of remotes) {
-        try {
-          await this._post('/api/services/remote/send_command', { entity_id: rm.entity_id, command: ['TV_INPUT'] })
-          inputExecuted = true
-        } catch (e) {}
-      }
-
-      // 2. Tenta acionar com.tcl.tv ou o passthrough na mídia
       for (const mp of mediaPlayers) {
-        try {
-          await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: 'com.tcl.tv' })
-          inputExecuted = true
-        } catch (e) {}
         try {
           await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: act })
           inputExecuted = true
         } catch (e) {}
       }
 
-      if (!inputExecuted && (domain === 'remote' || domain === 'media_player')) {
+      for (const rm of remotes) {
         try {
-          await this._post('/api/services/remote/send_command', { entity_id: deviceId.replace('media_player.', 'remote.'), command: ['TV_INPUT'] })
+          await this._post('/api/services/remote/turn_on', { entity_id: rm.entity_id, activity: act })
           inputExecuted = true
         } catch (e) {}
       }

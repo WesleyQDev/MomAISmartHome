@@ -245,9 +245,20 @@ export function DeviceControlCardContent({
     setCurrentDevice(device)
   }, [device])
 
+  const effectiveAllDevices = React.useMemo(() => {
+    const list = [...(allDevices || [])]
+    const rels = (currentDevice.attributes?.relatedEntities as Device[]) || (device.attributes?.relatedEntities as Device[]) || []
+    for (const r of rels) {
+      if (r && r.id && !list.some((d) => d.id === r.id)) {
+        list.push(r)
+      }
+    }
+    return list
+  }, [allDevices, currentDevice, device])
+
   const volumeDevice = currentDevice.domain === 'media_player'
     ? currentDevice
-    : (allDevices.find((candidate) => candidate.domain === 'media_player' && candidate.name === currentDevice.name) || currentDevice)
+    : (effectiveAllDevices.find((candidate) => candidate.domain === 'media_player' && (candidate.name.toLowerCase().trim() === currentDevice.name.toLowerCase().trim() || candidate.id === currentDevice.id)) || currentDevice)
   const [brightness, setBrightnessState] = useState<number>(currentDevice.state?.brightness ?? 94)
   const [tempPct, setTempPctState] = useState<number>(85)
   const [activeTab, setActiveTab] = useState<'brightness' | 'color' | 'temp'>('brightness')
@@ -524,7 +535,7 @@ export function DeviceControlCardContent({
       } catch (e) {}
 
       // 2b. Tentar remote.turn_on com activity no remote (ex: remote.tv_thucos)
-      const candidateRemote = allDevices.find(d => d.domain === 'remote' && (d.id.includes('tv') || d.name.toLowerCase().includes('tv')))
+      const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote')
       if (candidateRemote) {
         try {
           const res = await executeService('remote', 'turn_on', {
@@ -557,7 +568,7 @@ export function DeviceControlCardContent({
       const act = inputActivityMap[cmdUpper]
 
       // Tentar no media_player.tv_thucos (Chromecast / Google TV entity)
-      const chromecastMedia = allDevices.find(d => d.domain === 'media_player' && d.id !== targetId && d.id.includes('tv'))
+      const chromecastMedia = effectiveAllDevices.find(d => d.domain === 'media_player' && d.id !== targetId)
       const targetMediaId = chromecastMedia ? chromecastMedia.id : targetId
 
       try {
@@ -592,10 +603,7 @@ export function DeviceControlCardContent({
     const candidates = androidTvCommandMap[cmdUpper] || [cmdUpper]
 
     // 4. Tentar remote.send_command na própria entidade ou em entidade remote correspondente (ex: remote.tv_thucos)
-    const candidateRemote = allDevices.find(d => d.domain === 'remote' && (
-      d.id.includes('tv') ||
-      d.name.toLowerCase().includes('tv')
-    ))
+    const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote')
 
     const remoteTargetId = domain === 'remote'
       ? targetId
@@ -667,7 +675,7 @@ export function DeviceControlCardContent({
 
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, '#ffffff')
 
-  if (device.domain === 'remote' || (device.domain === 'media_player' && (device.name.toLowerCase().includes('tv') || device.attributes?.deviceClass === 'tv'))) {
+  if (device.domain === 'remote' || device.domain === 'media_player') {
     const rawSources = (device.attributes?.source_list as string[]) || (currentDevice.attributes?.source_list as string[])
     const defaultSources = ['TV', 'HDMI 1', 'HDMI 2', 'AV']
     const baseSources = (Array.isArray(rawSources) && rawSources.length > 0) ? rawSources : defaultSources
