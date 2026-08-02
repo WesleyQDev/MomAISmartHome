@@ -52,6 +52,8 @@ import {
   SvgPower,
   SvgBack,
   SvgYoutube,
+  SvgEye,
+  SvgEyeOff,
   getDomainSvgIcon,
   getDynamicSvgIcon,
   getWeatherSvgIcon
@@ -451,6 +453,7 @@ export default function SmartHomePage() {
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
   const [haUrl, setHaUrl] = useState('')
   const [haToken, setHaToken] = useState('')
+  const [showToken, setShowToken] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -555,7 +558,7 @@ export default function SmartHomePage() {
   const fetchLastConnection = async () => {
     try {
       const last = await api.getLastConnection()
-      if (last && (last.url || last.token)) {
+      if (last && typeof last === 'object') {
         if (last.url) setHaUrl(last.url)
         if (last.token) setHaToken(last.token)
       }
@@ -702,7 +705,38 @@ export default function SmartHomePage() {
               <label className="sh-label">URL do Home Assistant</label>
               <input className="sh-input" type="url" required placeholder="http://homeassistant.local:8123" value={haUrl} onChange={(e) => setHaUrl(e.target.value)} />
               <label className="sh-label">Long-Lived Access Token</label>
-              <input className="sh-input" type="password" required placeholder="eyJhbGciOiJIUzI1NiIs..." value={haToken} onChange={(e) => setHaToken(e.target.value)} />
+              <div style={{ position: 'relative', width: '100%' }}>
+                <input
+                  className="sh-input"
+                  type={showToken ? 'text' : 'password'}
+                  required
+                  placeholder="eyJhbGciOiJIUzI1NiIs..."
+                  value={haToken}
+                  onChange={(e) => setHaToken(e.target.value)}
+                  style={{ paddingRight: '38px' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowToken(!showToken)}
+                  title={showToken ? 'Ocultar token' : 'Mostrar token'}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: '#a78bfa',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  {showToken ? <SvgEyeOff size={16} /> : <SvgEye size={16} />}
+                </button>
+              </div>
               {connectError && <p style={{ color: '#f87171', fontSize: '13px', marginTop: '12px' }}>{connectError}</p>}
               <div style={{ display: 'flex', gap: '12px', marginTop: '24px', justifyContent: 'flex-end' }}>
                 <button type="button" className="sh-btn" onClick={() => { setShowConnectModal(false); setConnectError(null) }}>Cancelar</button>
@@ -781,14 +815,38 @@ export default function SmartHomePage() {
                   <SvgLock size={13} color="#c084fc" />
                   Long-Lived Access Token
                 </label>
-                <input
-                  className="sh-auth-input"
-                  type="password"
-                  required
-                  placeholder="eyJhbGciOiJIUzI1NiIs..."
-                  value={haToken}
-                  onChange={(e) => setHaToken(e.target.value)}
-                />
+                <div style={{ position: 'relative', width: '100%' }}>
+                  <input
+                    className="sh-auth-input"
+                    type={showToken ? 'text' : 'password'}
+                    required
+                    placeholder="eyJhbGciOiJIUzI1NiIs..."
+                    value={haToken}
+                    onChange={(e) => setHaToken(e.target.value)}
+                    style={{ paddingRight: '40px' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    title={showToken ? 'Ocultar token' : 'Mostrar token'}
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#c084fc',
+                      cursor: 'pointer',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {showToken ? <SvgEyeOff size={16} /> : <SvgEye size={16} />}
+                  </button>
+                </div>
               </div>
 
               {connectError && (

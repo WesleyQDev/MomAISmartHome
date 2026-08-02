@@ -25,6 +25,8 @@ var SvgScene = ({ size = 20, color = "currentColor", className = "", style }) =>
 var SvgAutomation = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "3" }), /* @__PURE__ */ React.createElement("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" }));
 var SvgAlarm = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" }));
 var SvgSun = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "4" }), /* @__PURE__ */ React.createElement("path", { d: "M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" }));
+var SvgEye = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" }), /* @__PURE__ */ React.createElement("circle", { cx: "12", cy: "12", r: "3" }));
+var SvgEyeOff = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" }), /* @__PURE__ */ React.createElement("line", { x1: "1", y1: "1", x2: "23", y2: "23" }));
 var SvgMoon = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" }));
 var SvgWeather = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("path", { d: "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z" }));
 var SvgCloudRain = ({ size = 20, color = "currentColor", className = "", style }) => /* @__PURE__ */ React.createElement("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", className, style }, /* @__PURE__ */ React.createElement("line", { x1: "16", y1: "13", x2: "14", y2: "21" }), /* @__PURE__ */ React.createElement("line", { x1: "8", y1: "13", x2: "6", y2: "21" }), /* @__PURE__ */ React.createElement("line", { x1: "12", y1: "15", x2: "10", y2: "23" }), /* @__PURE__ */ React.createElement("path", { d: "M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25" }));
@@ -1594,6 +1596,7 @@ function SmartHomePage() {
   const [selectedDevice, setSelectedDevice] = useState2(null);
   const [haUrl, setHaUrl] = useState2("");
   const [haToken, setHaToken] = useState2("");
+  const [showToken, setShowToken] = useState2(false);
   const [connectError, setConnectError] = useState2(null);
   const [connecting, setConnecting] = useState2(false);
   const [isSyncing, setIsSyncing] = useState2(false);
@@ -1684,7 +1687,7 @@ function SmartHomePage() {
   const fetchLastConnection = async () => {
     try {
       const last = await api.getLastConnection();
-      if (last && (last.url || last.token)) {
+      if (last && typeof last === "object") {
         if (last.url) setHaUrl(last.url);
         if (last.token) setHaToken(last.token);
       }
@@ -1797,7 +1800,40 @@ function SmartHomePage() {
   const activeDevicesTotal = devices.filter((d) => d.state.on).length;
   const controllableCount = devices.filter((d) => CONTROLLABLE_DOMAINS2.includes(d.domain)).length;
   const sensorsCount = devices.filter((d) => !CONTROLLABLE_DOMAINS2.includes(d.domain)).length;
-  return /* @__PURE__ */ React4.createElement("div", { className: "sh-root" }, /* @__PURE__ */ React4.createElement(SmartHomeStyles, null), showConnectModal && /* @__PURE__ */ React4.createElement("div", { className: "sh-modal-overlay" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-modal" }, /* @__PURE__ */ React4.createElement("h3", { style: { fontSize: "20px", fontWeight: 700, margin: "0 0 8px", color: "#f8fafc" } }, "Conectar ao Home Assistant"), /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: "#94a3b8", margin: "0 0 20px", lineHeight: 1.5 } }, "Informe a URL do seu servidor Home Assistant e um Long-Lived Access Token."), /* @__PURE__ */ React4.createElement("form", { onSubmit: handleConnect }, /* @__PURE__ */ React4.createElement("label", { className: "sh-label" }, "URL do Home Assistant"), /* @__PURE__ */ React4.createElement("input", { className: "sh-input", type: "url", required: true, placeholder: "http://homeassistant.local:8123", value: haUrl, onChange: (e) => setHaUrl(e.target.value) }), /* @__PURE__ */ React4.createElement("label", { className: "sh-label" }, "Long-Lived Access Token"), /* @__PURE__ */ React4.createElement("input", { className: "sh-input", type: "password", required: true, placeholder: "eyJhbGciOiJIUzI1NiIs...", value: haToken, onChange: (e) => setHaToken(e.target.value) }), connectError && /* @__PURE__ */ React4.createElement("p", { style: { color: "#f87171", fontSize: "13px", marginTop: "12px" } }, connectError), /* @__PURE__ */ React4.createElement("div", { style: { display: "flex", gap: "12px", marginTop: "24px", justifyContent: "flex-end" } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "sh-btn", onClick: () => {
+  return /* @__PURE__ */ React4.createElement("div", { className: "sh-root" }, /* @__PURE__ */ React4.createElement(SmartHomeStyles, null), showConnectModal && /* @__PURE__ */ React4.createElement("div", { className: "sh-modal-overlay" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-modal" }, /* @__PURE__ */ React4.createElement("h3", { style: { fontSize: "20px", fontWeight: 700, margin: "0 0 8px", color: "#f8fafc" } }, "Conectar ao Home Assistant"), /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: "#94a3b8", margin: "0 0 20px", lineHeight: 1.5 } }, "Informe a URL do seu servidor Home Assistant e um Long-Lived Access Token."), /* @__PURE__ */ React4.createElement("form", { onSubmit: handleConnect }, /* @__PURE__ */ React4.createElement("label", { className: "sh-label" }, "URL do Home Assistant"), /* @__PURE__ */ React4.createElement("input", { className: "sh-input", type: "url", required: true, placeholder: "http://homeassistant.local:8123", value: haUrl, onChange: (e) => setHaUrl(e.target.value) }), /* @__PURE__ */ React4.createElement("label", { className: "sh-label" }, "Long-Lived Access Token"), /* @__PURE__ */ React4.createElement("div", { style: { position: "relative", width: "100%" } }, /* @__PURE__ */ React4.createElement(
+    "input",
+    {
+      className: "sh-input",
+      type: showToken ? "text" : "password",
+      required: true,
+      placeholder: "eyJhbGciOiJIUzI1NiIs...",
+      value: haToken,
+      onChange: (e) => setHaToken(e.target.value),
+      style: { paddingRight: "38px" }
+    }
+  ), /* @__PURE__ */ React4.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: () => setShowToken(!showToken),
+      title: showToken ? "Ocultar token" : "Mostrar token",
+      style: {
+        position: "absolute",
+        right: "10px",
+        top: "50%",
+        transform: "translateY(-50%)",
+        background: "none",
+        border: "none",
+        color: "#a78bfa",
+        cursor: "pointer",
+        padding: "4px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      }
+    },
+    showToken ? /* @__PURE__ */ React4.createElement(SvgEyeOff, { size: 16 }) : /* @__PURE__ */ React4.createElement(SvgEye, { size: 16 })
+  )), connectError && /* @__PURE__ */ React4.createElement("p", { style: { color: "#f87171", fontSize: "13px", marginTop: "12px" } }, connectError), /* @__PURE__ */ React4.createElement("div", { style: { display: "flex", gap: "12px", marginTop: "24px", justifyContent: "flex-end" } }, /* @__PURE__ */ React4.createElement("button", { type: "button", className: "sh-btn", onClick: () => {
     setShowConnectModal(false);
     setConnectError(null);
   } }, "Cancelar"), /* @__PURE__ */ React4.createElement("button", { type: "submit", className: "sh-btn-primary", disabled: connecting }, connecting ? "Conectando..." : "Conectar"))))), selectedDevice && /* @__PURE__ */ React4.createElement(
@@ -1818,17 +1854,40 @@ function SmartHomePage() {
       value: haUrl,
       onChange: (e) => setHaUrl(e.target.value)
     }
-  )), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-input-group" }, /* @__PURE__ */ React4.createElement("label", { className: "sh-auth-label" }, /* @__PURE__ */ React4.createElement(SvgLock, { size: 13, color: "#c084fc" }), "Long-Lived Access Token"), /* @__PURE__ */ React4.createElement(
+  )), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-input-group" }, /* @__PURE__ */ React4.createElement("label", { className: "sh-auth-label" }, /* @__PURE__ */ React4.createElement(SvgLock, { size: 13, color: "#c084fc" }), "Long-Lived Access Token"), /* @__PURE__ */ React4.createElement("div", { style: { position: "relative", width: "100%" } }, /* @__PURE__ */ React4.createElement(
     "input",
     {
       className: "sh-auth-input",
-      type: "password",
+      type: showToken ? "text" : "password",
       required: true,
       placeholder: "eyJhbGciOiJIUzI1NiIs...",
       value: haToken,
-      onChange: (e) => setHaToken(e.target.value)
+      onChange: (e) => setHaToken(e.target.value),
+      style: { paddingRight: "40px" }
     }
-  )), connectError && /* @__PURE__ */ React4.createElement("div", { style: { background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "10px", padding: "8px 12px", color: "#fca5a5", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React4.createElement(SvgAlert, { size: 15, color: "#ef4444" }), /* @__PURE__ */ React4.createElement("span", null, connectError)), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn-primary", style: { width: "100%", padding: "12px 18px", fontSize: "13.5px", marginTop: "4px" }, type: "submit", disabled: connecting }, connecting ? /* @__PURE__ */ React4.createElement("span", null, "Conectando...") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgPlus, { size: 15, color: "#ffffff" }), /* @__PURE__ */ React4.createElement("span", null, "Conectar ao Home Assistant")))))) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "sh-header" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-header-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-logo-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 22, color: "#a78bfa" })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h1", { className: "sh-title" }, "MomAI Smart Home"))), /* @__PURE__ */ React4.createElement("div", { className: "sh-actions" }, /* @__PURE__ */ React4.createElement(
+  ), /* @__PURE__ */ React4.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: () => setShowToken(!showToken),
+      title: showToken ? "Ocultar token" : "Mostrar token",
+      style: {
+        position: "absolute",
+        right: "12px",
+        top: "50%",
+        transform: "translateY(-50%)",
+        background: "none",
+        border: "none",
+        color: "#c084fc",
+        cursor: "pointer",
+        padding: "4px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      }
+    },
+    showToken ? /* @__PURE__ */ React4.createElement(SvgEyeOff, { size: 16 }) : /* @__PURE__ */ React4.createElement(SvgEye, { size: 16 })
+  ))), connectError && /* @__PURE__ */ React4.createElement("div", { style: { background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "10px", padding: "8px 12px", color: "#fca5a5", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" } }, /* @__PURE__ */ React4.createElement(SvgAlert, { size: 15, color: "#ef4444" }), /* @__PURE__ */ React4.createElement("span", null, connectError)), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn-primary", style: { width: "100%", padding: "12px 18px", fontSize: "13.5px", marginTop: "4px" }, type: "submit", disabled: connecting }, connecting ? /* @__PURE__ */ React4.createElement("span", null, "Conectando...") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgPlus, { size: 15, color: "#ffffff" }), /* @__PURE__ */ React4.createElement("span", null, "Conectar ao Home Assistant")))))) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { className: "sh-header" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-header-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-logo-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 22, color: "#a78bfa" })), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h1", { className: "sh-title" }, "MomAI Smart Home"))), /* @__PURE__ */ React4.createElement("div", { className: "sh-actions" }, /* @__PURE__ */ React4.createElement(
     "button",
     {
       className: "sh-btn",

@@ -92,6 +92,11 @@ async function runTests() {
       token: 'mock_token'
     }
   })
+  await mockMomai.storage.set('last_credentials', {
+    url: 'http://ha.local:8123',
+    token: 'mock_token',
+    name: 'Home Assistant Test'
+  })
 
   const savedMock = await mockMomai.storage.get('connections')
   assert('momai.storage gravou conexão mock', savedMock && savedMock.ha_test && savedMock.ha_test.token === 'mock_token')
@@ -149,7 +154,7 @@ async function runTests() {
   assert('control_device usa toggle real', toggleRes && toggleRes.ok === true && toggled === true)
 
   const lastConnection = await MomAIHomeConnector.getLastConnection(mockMomai)
-  assert('getLastConnection não devolve token ao renderer', lastConnection && !Object.prototype.hasOwnProperty.call(lastConnection, 'token'))
+  assert('getLastConnection devolve url e token para persistência na UI', lastConnection && lastConnection.url && lastConnection.token)
 
   const HomeAssistantProvider = require('./src/integrations/providers/homeAssistant')
   const provider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })

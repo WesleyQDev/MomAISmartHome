@@ -146,25 +146,31 @@ class MomAIHomeConnector extends EventEmitter {
     // Desconecta e remove conexões antigas do mesmo tipo para manter apenas a conexão ativa
     await this.disconnectAll(momai).catch(() => {});
 
+    this.auth.setCredentials(url, token);
+
     const connectionId = 'ha_' + Date.now();
     const result = await this.devices.registerProvider('homeassistant', { url, token });
 
     await this.tokenManager.saveConnection(
       connectionId,
       'homeassistant',
-      this.auth.toConfig(),
+      { url, token },
       displayName,
       'local'
     );
 
+    this.lastCredentials = { url, token, name: displayName };
+
     if (momai?.storage) {
       try {
+        await momai.storage.set('last_credentials', { url, token, name: displayName });
         const existing = (await momai.storage.get('connections')) || {};
         existing[connectionId] = {
           id: connectionId,
           type: 'homeassistant',
           name: displayName,
           url,
+          token,
           email: 'local',
           updatedAt: Date.now()
         };
@@ -190,6 +196,36 @@ class MomAIHomeConnector extends EventEmitter {
   }
 
   async getLastConnection(momai) {
+    if (momai?.storage?.storageDir && this.dbManager) {
+      const customDbPath = path.join(momai.storage.storageDir, 'smarthome.sqlite');
+      if (this.dbManager.dbPath !== customDbPath) {
+        this.dbManager.dbPath = customDbPath;
+      }
+      if (this.tokenManager && typeof this.tokenManager.reloadKey === 'function') {
+        this.tokenManager.reloadKey(momai.storage.storageDir);
+      }
+    }
+
+    if (momai?.storage) {
+      try {
+        const lastCreds = await momai.storage.get('last_credentials');
+        if (lastCreds && typeof lastCreds === 'object' && (lastCreds.url || lastCreds.token)) {
+          return { url: lastCreds.url || '', token: lastCreds.token || '', name: lastCreds.name || '' };
+        }
+      } catch {}
+    }
+
+    if (this.lastCredentials && (this.lastCredentials.url || this.lastCredentials.token)) {
+      return { url: this.lastCredentials.url || '', token: this.lastCredentials.token || '', name: this.lastCredentials.name || '' };
+    }
+
+    try {
+      const savedTokenCreds = await this.tokenManager.getLastCredentials();
+      if (savedTokenCreds && (savedTokenCreds.url || savedTokenCreds.token)) {
+        return { url: savedTokenCreds.url || '', token: savedTokenCreds.token || '', name: savedTokenCreds.name || '' };
+      }
+    } catch {}
+
     if (momai?.storage) {
       try {
         const savedConns = await momai.storage.get('connections');
@@ -198,7 +234,7 @@ class MomAIHomeConnector extends EventEmitter {
           if (entries.length > 0) {
             const last = entries[entries.length - 1];
             if (last && last.url) {
-              return { url: last.url, name: last.name || '' };
+              return { url: last.url, token: last.token || '', name: last.name || '' };
             }
           }
         }
@@ -210,12 +246,12 @@ class MomAIHomeConnector extends EventEmitter {
       if (conns && conns.length > 0) {
         const full = await this.tokenManager.getConnection(conns[0].id);
         if (full && full.config) {
-          return { url: full.config.url || '', name: full.name || '' };
+          return { url: full.config.url || '', token: full.config.token || '', name: full.name || '' };
         }
       }
     } catch {}
 
-    return { url: '', name: '' };
+    return { url: '', token: '', name: '' };
   }
 
   async getDevices(connectionId) {

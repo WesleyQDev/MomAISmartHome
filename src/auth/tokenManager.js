@@ -98,6 +98,25 @@ class TokenManager {
     `;
 
     await this.dbManager.run(sql, [id, providerType, name, encryptedJson, email]);
+
+    try {
+      const dbDir = path.dirname(this.dbManager.dbPath);
+      if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+      const credsPath = path.join(dbDir, 'last_credentials.json');
+      fs.writeFileSync(credsPath, JSON.stringify({ url: config.url || '', token: config.token || '', name: name || '' }), 'utf8');
+    } catch {}
+  }
+
+  async getLastCredentials() {
+    try {
+      const dbDir = path.dirname(this.dbManager.dbPath);
+      const credsPath = path.join(dbDir, 'last_credentials.json');
+      if (fs.existsSync(credsPath)) {
+        const content = fs.readFileSync(credsPath, 'utf8');
+        return JSON.parse(content);
+      }
+    } catch {}
+    return null;
   }
 
   async getConnection(id) {
