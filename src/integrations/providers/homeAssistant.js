@@ -159,7 +159,7 @@ class HomeAssistantProvider extends BaseProvider {
         }
       })
 
-      ws.on('close', () => {
+      on('close', () => {
         this.wsConnected = false
         if (this.connected) {
           this._scheduleWsReconnect()

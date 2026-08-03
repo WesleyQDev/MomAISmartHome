@@ -1,6 +1,6 @@
 {
   "name": "momai-smart-home",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "MomAI Smart Home - Extensão de automação residencial com suporte a Home Assistant e provedores plugáveis",
   "main": "src/index.js",
   "scripts": {

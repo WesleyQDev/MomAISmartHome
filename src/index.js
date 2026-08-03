@@ -119,6 +119,19 @@ class MomAIHomeConnector extends EventEmitter {
       }
     }
 
+    if (this.connections.length === 0 && this.tokenManager) {
+      try {
+        const lastCreds = await this.tokenManager.getLastCredentials();
+        if (lastCreds && lastCreds.url && lastCreds.token) {
+          const regRes = await this.devices.registerProvider('homeassistant', { url: lastCreds.url, token: lastCreds.token });
+          if (regRes && regRes.success !== false) {
+            this.connections.push({ id: 'ha_last_creds', type: 'homeassistant', name: lastCreds.name || 'Home Assistant', email: 'local' });
+            this.isConnected = true;
+          }
+        }
+      } catch (err) {}
+    }
+
     if (!this._initialized || this.connections.length === 0) {
       this._initialized = true;
       await this.init(momai).catch(() => {});

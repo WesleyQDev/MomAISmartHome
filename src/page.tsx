@@ -198,13 +198,13 @@ async function sendCommand(toolName: string, args: any = {}): Promise<any> {
 
 const api: BackendApi = {
   connectToHomeAssistant: (url, token, name) => sendCommand('connectToHomeAssistant', { url, token, name }),
-  getDevices: (connectionId?) => sendCommand('getDevices', { connectionId }).then((r: any) => r.devices || []),
-  syncDevices: (connectionId?) => sendCommand('syncDevices', { connectionId }).then((r: any) => r.devices || []),
+  getDevices: (connectionId?) => sendCommand('getDevices', { connectionId }).then((r: any) => (Array.isArray(r) ? r : r?.devices || [])),
+  syncDevices: (connectionId?) => sendCommand('syncDevices', { connectionId }).then((r: any) => (Array.isArray(r) ? r : r?.devices || [])),
   turnOnDevice: (deviceId, providerType?, params?) => sendCommand('turnOnDevice', { deviceId, providerType, params }),
   turnOffDevice: (deviceId, providerType?, params?) => sendCommand('turnOffDevice', { deviceId, providerType, params }),
   setClimate: (deviceId, temperature, hvacMode, providerType?) => sendCommand('setClimate', { deviceId, temperature, hvacMode, providerType }),
   callService: (domain, service, data, providerType) => sendCommand('callService', { domain, service, data, providerType: providerType || 'homeassistant' }),
-  listConnections: () => sendCommand('listConnections').then((r: any) => r.connections || []),
+  listConnections: () => sendCommand('listConnections').then((r: any) => (Array.isArray(r) ? r : r?.connections || [])),
   disconnectAll: () => sendCommand('disconnectAll'),
   removeConnection: (connectionId) => sendCommand('removeConnection', { connectionId }),
   getStatus: () => sendCommand('getStatus'),

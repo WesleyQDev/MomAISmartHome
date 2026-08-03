@@ -18,10 +18,21 @@ async function init() {
     await connector.init(momaiObj)
     ready = true
     if (typeof process.send === 'function') process.send({ type: 'ready' })
+
+    // Perform connection & device cache refresh asynchronously in background
+    connector.ensureConnected(momaiObj)
+      .then(() => refreshDeviceCache())
+      .catch((err) => {
+        if (typeof process.send === 'function') process.send({ type: 'log', message: `Background connect error: ${err.message}` })
+      })
   } catch (err) {
-    if (typeof process.send === 'function') process.send({ type: 'log', message: `Init error: ${err.message}` })
+    ready = true
+    if (typeof process.send === 'function') process.send({ type: 'ready' })
   }
 }
+
+// Automatically initialize connection on worker startup
+init().catch((err) => console.warn('[runtime] Auto-init error:', err))
 
 if (typeof connector.on === 'function') {
   connector.on('state_changed', (data) => {

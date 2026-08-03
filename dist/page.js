@@ -1445,13 +1445,13 @@ async function sendCommand(toolName, args = {}) {
 }
 var api = {
   connectToHomeAssistant: (url, token, name) => sendCommand("connectToHomeAssistant", { url, token, name }),
-  getDevices: (connectionId) => sendCommand("getDevices", { connectionId }).then((r) => r.devices || []),
-  syncDevices: (connectionId) => sendCommand("syncDevices", { connectionId }).then((r) => r.devices || []),
+  getDevices: (connectionId) => sendCommand("getDevices", { connectionId }).then((r) => Array.isArray(r) ? r : r?.devices || []),
+  syncDevices: (connectionId) => sendCommand("syncDevices", { connectionId }).then((r) => Array.isArray(r) ? r : r?.devices || []),
   turnOnDevice: (deviceId, providerType, params) => sendCommand("turnOnDevice", { deviceId, providerType, params }),
   turnOffDevice: (deviceId, providerType, params) => sendCommand("turnOffDevice", { deviceId, providerType, params }),
   setClimate: (deviceId, temperature, hvacMode, providerType) => sendCommand("setClimate", { deviceId, temperature, hvacMode, providerType }),
   callService: (domain, service, data, providerType) => sendCommand("callService", { domain, service, data, providerType: providerType || "homeassistant" }),
-  listConnections: () => sendCommand("listConnections").then((r) => r.connections || []),
+  listConnections: () => sendCommand("listConnections").then((r) => Array.isArray(r) ? r : r?.connections || []),
   disconnectAll: () => sendCommand("disconnectAll"),
   removeConnection: (connectionId) => sendCommand("removeConnection", { connectionId }),
   getStatus: () => sendCommand("getStatus"),

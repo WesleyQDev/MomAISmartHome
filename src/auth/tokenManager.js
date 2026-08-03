@@ -171,8 +171,14 @@ class TokenManager {
     }
 
     if (!config) {
-      console.error('[TokenManager] Erro ao descriptografar config da conexão', id);
-      return null;
+      const lastCreds = await this.getLastCredentials();
+      if (lastCreds && lastCreds.url && lastCreds.token) {
+        config = { url: lastCreds.url, token: lastCreds.token };
+        migrated = true;
+      } else {
+        console.error('[TokenManager] Erro ao descriptografar config da conexão', id);
+        return null;
+      }
     }
 
     if (migrated) {
@@ -196,7 +202,20 @@ class TokenManager {
 
   async listConnections() {
     await this.dbManager.init();
-    return this.dbManager.all(`SELECT id, provider_type, name, user_email, updated_at FROM connections ORDER BY updated_at DESC`);
+    const rows = await this.dbManager.all(`SELECT id, provider_type, name, user_email, updated_at FROM connections ORDER BY updated_at DESC`);
+    if (rows && rows.length > 0) return rows;
+
+    const lastCreds = await this.getLastCredentials();
+    if (lastCreds && lastCreds.url) {
+      return [{
+        id: 'ha_last_creds',
+        provider_type: 'homeassistant',
+        name: lastCreds.name || 'Home Assistant',
+        user_email: 'local',
+        updated_at: new Date().toISOString()
+      }];
+    }
+    return [];
   }
 
   async removeConnection(id) {
