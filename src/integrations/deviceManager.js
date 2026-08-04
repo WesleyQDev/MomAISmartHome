@@ -27,6 +27,9 @@ class DeviceManager extends EventEmitter {
       provider.on('state_changed', (data) => {
         this.emit('state_changed', data);
       });
+      provider.on('connection_changed', (data) => {
+        this.emit('connection_changed', data);
+      });
     }
 
     this.providers.set(type, provider);
@@ -35,7 +38,7 @@ class DeviceManager extends EventEmitter {
       result = await provider.connect();
     } catch (err) {
       console.warn(`[DeviceManager] Connect offline/error for ${type}:`, err.message);
-      result = { success: false, error: err.message };
+      result = { success: false, error: err.message, code: err.code || 'ha_error' };
     }
     return result;
   }
@@ -140,12 +143,17 @@ class DeviceManager extends EventEmitter {
 
   getStatus() {
     const statuses = {};
+    let anyConnected = false;
+    let lastError = null;
     for (const [type, provider] of this.providers.entries()) {
-      statuses[type] = { connected: provider.connected, name: provider.name };
+      statuses[type] = { connected: provider.connected, name: provider.name, error: provider.lastError || null };
+      if (provider.connected) anyConnected = true;
+      if (provider.lastError) lastError = provider.lastError;
     }
     return {
       providers: statuses,
-      connected: this.providers.size > 0 && Array.from(this.providers.values()).some((p) => p.connected)
+      connected: anyConnected,
+      lastError
     };
   }
 

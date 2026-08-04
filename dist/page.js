@@ -1382,6 +1382,87 @@ var SMART_HOME_CSS = `
   .sh-remote-icon-btn.main { background: #8b5cf6; color: #fff; border: none; }
   .sh-remote-icon-btn.main:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(139,92,246,0.4); }
   .sh-remote-icon-btn.main:active { transform: scale(0.88) translateY(2px); background: #7c3aed; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
+
+  /* Offline Badge & Reconnecting Card */
+  .sh-badge-offline {
+    background: rgba(239, 68, 68, 0.15) !important;
+    color: #fca5a5 !important;
+    border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  }
+  .sh-badge-offline .sh-dot {
+    background: #ef4444 !important;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6) !important;
+    animation: none !important;
+  }
+
+  .sh-reconnect-container {
+    max-width: 580px;
+    margin: 32px auto 40px;
+    padding: 0 16px;
+    animation: shFadeIn 0.3s ease-out;
+  }
+
+  .sh-reconnect-card {
+    background: #1E1E23 !important;
+    border: none !important;
+    border-radius: 24px;
+    padding: 36px 28px;
+    text-align: center;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .sh-reconnect-icon-box {
+    width: 64px;
+    height: 64px;
+    border-radius: 20px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #f87171;
+    margin: 0 auto 20px;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+  }
+
+  .sh-reconnect-title {
+    font-size: 19px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 0 0 8px;
+    letter-spacing: -0.3px;
+  }
+
+  .sh-reconnect-sub {
+    font-size: 13.5px;
+    color: #cbd5e1;
+    line-height: 1.5;
+    margin: 0 0 18px;
+  }
+
+  .sh-reconnect-url-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 6px 14px;
+    border-radius: 9999px;
+    font-size: 12px;
+    color: #a78bfa;
+    font-family: monospace;
+    margin-bottom: 24px;
+  }
+
+  .sh-reconnect-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
 `;
 function SmartHomeStyles() {
   return React3.createElement("style", null, SMART_HOME_CSS);
@@ -1590,11 +1671,12 @@ function SmartHomePage() {
   const [connections, setConnections] = useState2([]);
   const [devices, setDevices] = useState2([]);
   const [isConnected, setIsConnected] = useState2(false);
+  const [hasSavedConnection, setHasSavedConnection] = useState2(false);
   const [loading, setLoading] = useState2(true);
   const [activeFilter, setActiveFilter] = useState2("controllable");
   const [showConnectModal, setShowConnectModal] = useState2(false);
   const [selectedDevice, setSelectedDevice] = useState2(null);
-  const [haUrl, setHaUrl] = useState2("");
+  const [haUrl, setHaUrl] = useState2("http://homeassistant.local:8123");
   const [haToken, setHaToken] = useState2("");
   const [showToken, setShowToken] = useState2(false);
   const [connectError, setConnectError] = useState2(null);
@@ -1604,9 +1686,21 @@ function SmartHomePage() {
     loadStatus();
   }, []);
   useEffect(() => {
-    if (!isConnected) return;
+    if (!hasSavedConnection) return;
     const interval = setInterval(async () => {
       try {
+        const status = await api.getStatus();
+        const haProvider = status?.providerStatus?.providers?.homeassistant;
+        const connected = Boolean(status?.connected && haProvider?.connected !== false);
+        setIsConnected(connected);
+        if (!connected) {
+          setDevices([]);
+          if (status?.lastError || haProvider?.error) {
+            setConnectError(status?.lastError || haProvider?.error || null);
+          }
+          return;
+        }
+        setConnectError(null);
         const devs = await api.getDevices();
         if (Array.isArray(devs)) {
           const deduplicated = deduplicateDevicesByName(devs);
@@ -1615,11 +1709,11 @@ function SmartHomePage() {
       } catch (err) {
         console.warn("[SmartHome] Erro na sincroniza\xE7\xE3o peri\xF3dica:", err);
       }
-    }, 1e4);
+    }, 5e3);
     return () => clearInterval(interval);
-  }, [isConnected]);
+  }, [hasSavedConnection]);
   useEffect(() => {
-    if (!isConnected) return;
+    if (!hasSavedConnection) return;
     let eventSource = null;
     try {
       const sseUrl = `${getApiBase()}/extensions/events`;
@@ -1627,35 +1721,50 @@ function SmartHomePage() {
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === "extension_event" && payload.eventType === "state_changed") {
-            const updatedDevice = payload.data?.device;
-            if (updatedDevice && updatedDevice.id) {
-              setDevices((prevDevices) => {
-                const index = prevDevices.findIndex((d) => d.id === updatedDevice.id);
-                if (index >= 0) {
-                  const updated = [...prevDevices];
-                  updated[index] = {
-                    ...updated[index],
-                    ...updatedDevice,
-                    state: { ...updated[index].state, ...updatedDevice.state },
-                    attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
-                  };
-                  return updated;
-                } else {
-                  return deduplicateDevicesByName([...prevDevices, updatedDevice]);
-                }
-              });
-              setSelectedDevice((prevSelected) => {
-                if (prevSelected && prevSelected.id === updatedDevice.id) {
-                  return {
-                    ...prevSelected,
-                    ...updatedDevice,
-                    state: { ...prevSelected.state, ...updatedDevice.state },
-                    attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
-                  };
-                }
-                return prevSelected;
-              });
+          if (payload.type === "extension_event") {
+            if (payload.eventType === "connection_changed") {
+              const connected = Boolean(payload.data?.connected);
+              setIsConnected(connected);
+              if (!connected) {
+                setDevices([]);
+                if (payload.data?.error) setConnectError(payload.data.error);
+              } else {
+                setConnectError(null);
+                api.getDevices().then((devs) => {
+                  if (Array.isArray(devs)) setDevices(deduplicateDevicesByName(devs));
+                }).catch(() => {
+                });
+              }
+            } else if (payload.eventType === "state_changed") {
+              const updatedDevice = payload.data?.device;
+              if (updatedDevice && updatedDevice.id) {
+                setDevices((prevDevices) => {
+                  const index = prevDevices.findIndex((d) => d.id === updatedDevice.id);
+                  if (index >= 0) {
+                    const updated = [...prevDevices];
+                    updated[index] = {
+                      ...updated[index],
+                      ...updatedDevice,
+                      state: { ...updated[index].state, ...updatedDevice.state },
+                      attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
+                    };
+                    return updated;
+                  } else {
+                    return deduplicateDevicesByName([...prevDevices, updatedDevice]);
+                  }
+                });
+                setSelectedDevice((prevSelected) => {
+                  if (prevSelected && prevSelected.id === updatedDevice.id) {
+                    return {
+                      ...prevSelected,
+                      ...updatedDevice,
+                      state: { ...prevSelected.state, ...updatedDevice.state },
+                      attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
+                    };
+                  }
+                  return prevSelected;
+                });
+              }
             }
           }
         } catch (err) {
@@ -1670,16 +1779,27 @@ function SmartHomePage() {
         eventSource.close();
       }
     };
-  }, [isConnected]);
+  }, [hasSavedConnection]);
   const handleResync = async () => {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
-      const devs = await api.syncDevices();
-      const deduplicated = deduplicateDevicesByName(devs);
-      setDevices(deduplicated);
+      const status = await api.getStatus();
+      const haProvider = status?.providerStatus?.providers?.homeassistant;
+      const connected = Boolean(status?.connected && haProvider?.connected !== false);
+      setIsConnected(connected);
+      if (connected) {
+        setConnectError(null);
+        const devs = await api.syncDevices();
+        const deduplicated = deduplicateDevicesByName(devs);
+        setDevices(deduplicated);
+      } else {
+        setDevices([]);
+        setConnectError(status?.lastError || haProvider?.error || "Servidor indispon\xEDvel ou offline");
+      }
     } catch (err) {
       console.warn("[SmartHome] Erro na resincroniza\xE7\xE3o manual:", err);
+      setConnectError(err.message || "Falha ao tentar reconectar");
     } finally {
       setIsSyncing(false);
     }
@@ -1687,23 +1807,39 @@ function SmartHomePage() {
   const fetchLastConnection = async () => {
     try {
       const last = await api.getLastConnection();
-      if (last && typeof last === "object") {
-        if (last.url) setHaUrl(last.url);
+      if (last && typeof last === "object" && last.url) {
+        setHaUrl(last.url);
         if (last.token) setHaToken(last.token);
+        setHasSavedConnection(true);
+      } else {
+        setHaUrl("http://homeassistant.local:8123");
       }
     } catch (err) {
       console.warn("[SmartHome] Erro ao buscar \xFAltima conex\xE3o:", err);
+      setHaUrl("http://homeassistant.local:8123");
     }
   };
   const loadStatus = async () => {
     setLoading(true);
     try {
-      const status = await api.getStatus();
       const conns = await api.listConnections();
       setConnections(conns);
       await fetchLastConnection();
-      const hasConnections = Array.isArray(conns) && conns.length > 0;
-      setIsConnected(Boolean(status?.connected || hasConnections));
+      if (conns && conns.length > 0) {
+        setHasSavedConnection(true);
+      }
+      const status = await api.getStatus();
+      const haProvider = status?.providerStatus?.providers?.homeassistant;
+      const connected = Boolean(status?.connected && haProvider?.connected !== false);
+      setIsConnected(connected);
+      if (!connected) {
+        setDevices([]);
+        if (status?.lastError || haProvider?.error) {
+          setConnectError(status?.lastError || haProvider?.error || null);
+        }
+      } else {
+        setConnectError(null);
+      }
       const devs = await api.getDevices();
       const deduplicated = deduplicateDevicesByName(devs || []);
       setDevices(deduplicated);
@@ -1726,6 +1862,7 @@ function SmartHomePage() {
       const result = await api.connectToHomeAssistant(haUrl.trim(), haToken.trim());
       if (result.success || result.ok) {
         setShowConnectModal(false);
+        setHasSavedConnection(true);
         await loadStatus();
       } else {
         setConnectError(result.message || result.error || "Falha ao conectar");
@@ -1739,6 +1876,7 @@ function SmartHomePage() {
     try {
       setLoading(true);
       setIsConnected(false);
+      setHasSavedConnection(false);
       setDevices([]);
       setConnections([]);
       await api.disconnectAll().catch(() => {
@@ -1748,8 +1886,8 @@ function SmartHomePage() {
         await api.removeConnection(c.id).catch(() => {
         });
       }
-      await fetchLastConnection();
-      setShowConnectModal(true);
+      setHaUrl("http://homeassistant.local:8123");
+      setHaToken("");
     } catch (err) {
       console.warn("[SmartHome] Erro ao desconectar:", err);
     } finally {
@@ -1844,7 +1982,7 @@ function SmartHomePage() {
       onClose: () => setSelectedDevice(null),
       onToggle: toggleDevice
     }
-  ), loading ? /* @__PURE__ */ React4.createElement("div", { className: "sh-auth" }, /* @__PURE__ */ React4.createElement("p", { style: { color: "#94a3b8" } }, "Carregando...")) : !isConnected ? /* @__PURE__ */ React4.createElement("div", { className: "sh-auth" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-card" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 32, color: "#c084fc" })), /* @__PURE__ */ React4.createElement("h2", { className: "sh-auth-title" }, "Home Assistant"), /* @__PURE__ */ React4.createElement("p", { className: "sh-auth-sub" }, "Conecte seus dispositivos inteligentes ao MomAI informando o endere\xE7o do seu servidor local ou remoto."), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feats-grid" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgLight, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Ilumina\xE7\xE3o & RGB")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgClimate, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Climatiza\xE7\xE3o")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgLock, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Fechaduras & Sensores")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgTv, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "M\xEDdia & Smart TVs")))), /* @__PURE__ */ React4.createElement("form", { onSubmit: handleConnect, className: "sh-auth-form" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-input-group" }, /* @__PURE__ */ React4.createElement("label", { className: "sh-auth-label" }, /* @__PURE__ */ React4.createElement(SvgWifi, { size: 13, color: "#c084fc" }), "URL do Servidor"), /* @__PURE__ */ React4.createElement(
+  ), loading ? /* @__PURE__ */ React4.createElement("div", { className: "sh-auth" }, /* @__PURE__ */ React4.createElement("p", { style: { color: "#94a3b8" } }, "Carregando...")) : !hasSavedConnection ? /* @__PURE__ */ React4.createElement("div", { className: "sh-auth" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-card" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-left" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-icon" }, /* @__PURE__ */ React4.createElement(SvgSmartHomeLogo, { size: 32, color: "#c084fc" })), /* @__PURE__ */ React4.createElement("h2", { className: "sh-auth-title" }, "Home Assistant"), /* @__PURE__ */ React4.createElement("p", { className: "sh-auth-sub" }, "Conecte seus dispositivos inteligentes ao MomAI informando o endere\xE7o do seu servidor local ou remoto."), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feats-grid" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgLight, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Ilumina\xE7\xE3o & RGB")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgClimate, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Climatiza\xE7\xE3o")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgLock, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "Fechaduras & Sensores")), /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-item" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-feat-icon-box" }, /* @__PURE__ */ React4.createElement(SvgTv, { size: 14 })), /* @__PURE__ */ React4.createElement("span", null, "M\xEDdia & Smart TVs")))), /* @__PURE__ */ React4.createElement("form", { onSubmit: handleConnect, className: "sh-auth-form" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-auth-input-group" }, /* @__PURE__ */ React4.createElement("label", { className: "sh-auth-label" }, /* @__PURE__ */ React4.createElement(SvgWifi, { size: 13, color: "#c084fc" }), "URL do Servidor"), /* @__PURE__ */ React4.createElement(
     "input",
     {
       className: "sh-auth-input",
@@ -1903,7 +2041,39 @@ function SmartHomePage() {
     },
     /* @__PURE__ */ React4.createElement(SvgRefresh, { size: 15, className: isSyncing ? "sh-spin" : "" }),
     /* @__PURE__ */ React4.createElement("span", null, isSyncing ? "Sincronizando..." : "Resincronizar")
-  ), /* @__PURE__ */ React4.createElement("div", { className: "sh-badge" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-dot" }), /* @__PURE__ */ React4.createElement("span", null, "Home Assistant")), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn sh-btn-danger", onClick: handleDisconnectAll }, /* @__PURE__ */ React4.createElement(SvgLogout, { size: 15 }), "Desconectar"))), devices.length > 0 && /* @__PURE__ */ React4.createElement("div", { className: "sh-chips" }, /* @__PURE__ */ React4.createElement(
+  ), /* @__PURE__ */ React4.createElement("div", { className: `sh-badge ${!isConnected ? "sh-badge-offline" : ""}` }, /* @__PURE__ */ React4.createElement("span", { className: "sh-dot" }), /* @__PURE__ */ React4.createElement("span", null, isConnected ? "Home Assistant" : "Offline")), /* @__PURE__ */ React4.createElement("button", { className: "sh-btn sh-btn-danger", onClick: handleDisconnectAll }, /* @__PURE__ */ React4.createElement(SvgLogout, { size: 15 }), "Desconectar"))), !isConnected ? (
+    /* RECONNECTING CARD WHEN HOME ASSISTANT IS OFFLINE */
+    /* @__PURE__ */ React4.createElement("div", { className: "sh-reconnect-container" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-reconnect-card" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-reconnect-icon-box" }, /* @__PURE__ */ React4.createElement(SvgAlert, { size: 28, color: "#ef4444" })), /* @__PURE__ */ React4.createElement("h2", { className: "sh-reconnect-title" }, "Home Assistant Indispon\xEDvel"), /* @__PURE__ */ React4.createElement("p", { className: "sh-reconnect-sub" }, "N\xE3o foi poss\xEDvel estabelecer conex\xE3o com o servidor. Verifique se o Home Assistant est\xE1 ligado e acess\xEDvel na rede."), haUrl && /* @__PURE__ */ React4.createElement("div", { className: "sh-reconnect-url-tag" }, /* @__PURE__ */ React4.createElement(SvgWifi, { size: 13, color: "#a78bfa" }), /* @__PURE__ */ React4.createElement("span", null, haUrl)), connectError && /* @__PURE__ */ React4.createElement("div", { style: {
+      background: "rgba(239, 68, 68, 0.12)",
+      border: "1px solid rgba(239, 68, 68, 0.25)",
+      borderRadius: "12px",
+      padding: "10px 14px",
+      color: "#fca5a5",
+      fontSize: "12px",
+      marginBottom: "24px",
+      textAlign: "center",
+      lineHeight: "1.4"
+    } }, connectError), /* @__PURE__ */ React4.createElement("div", { className: "sh-reconnect-actions" }, /* @__PURE__ */ React4.createElement(
+      "button",
+      {
+        className: "sh-btn-primary",
+        onClick: handleResync,
+        disabled: isSyncing,
+        style: { padding: "10px 18px", fontSize: "13px" }
+      },
+      /* @__PURE__ */ React4.createElement(SvgRefresh, { size: 15, className: isSyncing ? "sh-spin" : "" }),
+      /* @__PURE__ */ React4.createElement("span", null, isSyncing ? "Tentando Reconectar..." : "Tentar Reconectar Agora")
+    ), /* @__PURE__ */ React4.createElement(
+      "button",
+      {
+        className: "sh-btn sh-btn-danger",
+        onClick: handleDisconnectAll,
+        style: { padding: "10px 16px", fontSize: "13px" }
+      },
+      /* @__PURE__ */ React4.createElement(SvgLogout, { size: 15 }),
+      /* @__PURE__ */ React4.createElement("span", null, "Desconectar")
+    ))))
+  ) : /* @__PURE__ */ React4.createElement(React4.Fragment, null, devices.length > 0 && /* @__PURE__ */ React4.createElement("div", { className: "sh-chips" }, /* @__PURE__ */ React4.createElement(
     "button",
     {
       className: `sh-chip ${activeFilter === "controllable" ? "active" : ""}`,
@@ -1959,7 +2129,7 @@ function SmartHomePage() {
         adjustTemp(device, 1);
       } }, "+"), device.state.temperature != null && /* @__PURE__ */ React4.createElement("span", { style: { fontSize: "12px", color: "#94a3b8" } }, "atual: ", device.state.temperature, "\xB0")), device.domain === "sensor" && /* @__PURE__ */ React4.createElement("div", { style: { marginTop: "8px" } }, /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "15px", color: "#38bdf8", fontWeight: 700, margin: 0 } }, formatted.primary), formatted.secondary && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "11px", color: "#94a3b8", margin: "2px 0 0", display: "flex", alignItems: "center", gap: "4px" } }, /* @__PURE__ */ React4.createElement(SvgClock, { size: 11 }), " ", formatted.secondary)), device.domain === "cover" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#94a3b8", marginTop: "8px" } }, device.state.isOpen ? "Aberto" : "Fechado", device.state.position != null ? ` (${device.state.position}%)` : ""), device.domain === "lock" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.locked ? "#34d399" : "#f87171", fontWeight: 600, marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, device.state.locked ? /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgLock, { size: 13, color: "#34d399" }), " Trancado") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgUnlock, { size: 13, color: "#f87171" }), " Destrancado")), device.domain === "media_player" && device.state.mediaTitle && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#38bdf8", marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ React4.createElement(SvgPlay, { size: 11, color: "#38bdf8" }), " ", device.state.mediaTitle), device.domain === "binary_sensor" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.on ? "#f87171" : "#94a3b8", fontWeight: 600, marginTop: "8px" } }, device.state.on ? "Ativo" : "Inativo"))
     );
-  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice }))));
+  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice })))));
 }
 export {
   SmartHomePage as default

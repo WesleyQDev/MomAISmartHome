@@ -55,6 +55,25 @@ if (typeof connector.on === 'function') {
       }
     }
   })
+
+  connector.on('connection_changed', (data) => {
+    const dispatchEvent = (typeof momai !== 'undefined' && momai && typeof momai.sendEvent === 'function')
+      ? (type, payload) => momai.sendEvent(type, payload)
+      : (type, payload) => {
+          if (typeof process.send === 'function') {
+            process.send({ type: 'event', eventType: type, data: payload })
+          }
+        }
+
+    try {
+      dispatchEvent('connection_changed', {
+        connected: Boolean(data?.connected),
+        error: data?.error || null
+      })
+    } catch (err) {
+      console.warn('[runtime] Erro ao transmitir evento connection_changed:', err)
+    }
+  })
 }
 
 async function refreshDeviceCache() {
@@ -250,6 +269,24 @@ const tools = module.exports.tools = [
         device_name: {
           type: 'string',
           description: 'Nome do dispositivo cujo controle deve ser exibido (ex: "televisão", "luz da sala", "ar condicionado")'
+        }
+      }
+    }
+  },
+  {
+    name: 'close_device_control',
+    description: 'Fecha a interface de controle flutuante (overlay) aberta. Use device_name para fechar o controle de um dispositivo específico; omita para fechar o controle mais recente; ou use all=true para fechar todos os controles abertos.',
+    parameters: {
+      type: 'object',
+      required: [],
+      properties: {
+        device_name: {
+          type: 'string',
+          description: 'Nome do dispositivo cujo controle deve ser fechado (opcional). Ex: "televisão", "luz da sala".'
+        },
+        all: {
+          type: 'boolean',
+          description: 'Se true, fecha todos os controles abertos.'
         }
       }
     }
@@ -558,6 +595,7 @@ async function executeTool(toolName, args, momai) {
         skillId: 'momaismarthome',
         panel: 'dist/panel.js',
         panelType: 'momaismarthome-panel',
+        strategy: 'stack',
         overlaySize: { width: overlayWidth, height: overlayHeight },
         structuredResponse: {
           type: 'momaismarthome-panel',
@@ -586,6 +624,34 @@ async function executeTool(toolName, args, momai) {
         ok: true,
         tool: 'open_device_control',
         instruction: `Interface de controle do dispositivo "${device.name}" aberta com sucesso no overlay flutuante.`
+      }
+    }
+
+    case 'close_device_control': {
+      const dispatchEvent = (momai && typeof momai.sendEvent === 'function')
+        ? (type, payload) => momai.sendEvent(type, payload)
+        : (type, payload) => {
+            if (typeof process.send === 'function') {
+              process.send({ type: 'event', eventType: type, data: payload })
+            }
+          }
+      const deviceName = typeof args?.device_name === 'string' && args.device_name.trim()
+        ? args.device_name.trim()
+        : ''
+      const all = args?.all === true
+      try {
+        dispatchEvent('close_overlay', { skillId: 'momaismarthome', device_name: deviceName, all })
+      } catch (err) {
+        console.warn('[runtime] Erro ao enviar close_overlay:', err)
+      }
+      return {
+        ok: true,
+        tool: 'close_device_control',
+        instruction: all
+          ? 'Todos os controles flutuantes foram fechados.'
+          : deviceName
+            ? `Controle do dispositivo "${deviceName}" fechado.`
+            : 'Interface de controle flutuante fechada.'
       }
     }
 

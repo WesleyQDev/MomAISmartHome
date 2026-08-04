@@ -1,7 +1,7 @@
 {
   "id": "momaismarthome",
   "name": "MomAI Smart Home",
-  "version": "1.0.8",
+  "version": "1.0.16",
   "kind": "packaged",
   "description": "Integração com Home Assistant e suporte a múltiplos provedores de automação residencial.",
   "icon_bg": "#8b5cf6",
@@ -19,7 +19,7 @@
     "panel": "dist/panel.js",
     "panelType": "momaismarthome-panel"
   },
-  "eventTypes": ["open_overlay", "state_changed"],
+  "eventTypes": ["open_overlay", "state_changed", "connection_changed"],
   "theme": {
     "gradient": ["#a78bfa", "#7c3aed"],
     "accent": "#a78bfa"

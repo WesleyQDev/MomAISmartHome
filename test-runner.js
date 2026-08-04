@@ -269,9 +269,12 @@ async function runTests() {
   offlineProvider.connect = async () => {
     connectAttempted = true
     offlineProvider.connected = true
-    offlineProvider.cachedDevices.set('light.reconnect', { id: 'light.reconnect', name: 'Luz Reconectada' })
     return { success: true }
   }
+  // Após reconectar, o fetch de /api/states devolve os dispositivos.
+  offlineProvider._get = async () => [
+    { entity_id: 'light.reconnect', state: 'on', attributes: { friendly_name: 'Luz Reconectada' } }
+  ]
   const offlineDevs = await offlineProvider.listDevices()
   assert('listDevices reconecta automaticamente se desconectado', connectAttempted && offlineDevs.length > 0 && offlineDevs[0].id === 'light.reconnect')
   await offlineProvider.disconnect()

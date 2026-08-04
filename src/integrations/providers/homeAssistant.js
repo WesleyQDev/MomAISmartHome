@@ -95,6 +95,7 @@ class HomeAssistantProvider extends BaseProvider {
     this.url = config.url || process.env.HA_URL || 'http://homeassistant.local:8123'
     this.token = config.token || process.env.HA_TOKEN || ''
     this.cachedDevices = new Map()
+    this.lastError = null
 
     this.ws = null
     this.wsConnected = false
@@ -171,6 +172,17 @@ class HomeAssistantProvider extends BaseProvider {
     }
   }
 
+  _setConnected(connected, error = null) {
+    const changed = this.connected !== connected || (error && this.lastError !== error)
+    this.connected = connected
+    if (error) this.lastError = error
+    if (changed) {
+      try {
+        this.emit('connection_changed', { connected, error: this.lastError })
+      } catch (e) {}
+    }
+  }
+
   _handleWsMessage(msg) {
     if (!msg || typeof msg !== 'object') return
 
@@ -197,6 +209,7 @@ class HomeAssistantProvider extends BaseProvider {
     if (msg.type === 'auth_invalid') {
       console.warn('[HAProvider] Autenticação WebSocket recusada pelo Home Assistant:', msg.message)
       this.wsConnected = false
+      this._setConnected(false, 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)')
       return
     }
 
@@ -281,8 +294,14 @@ class HomeAssistantProvider extends BaseProvider {
             clearTimeout(timer)
             if (res.statusCode >= 200 && res.statusCode < 300) {
               try { resolve(JSON.parse(body)) } catch { resolve(null) }
+            } else if (res.statusCode === 401 || res.statusCode === 403) {
+              const err = new Error(`Token do Home Assistant inválido ou expirado (HTTP ${res.statusCode})`)
+              err.code = 'ha_auth'
+              reject(err)
             } else {
-              reject(new Error(`HA API error ${res.statusCode}: ${body.slice(0, 200)}`))
+              const err = new Error(`HA API error ${res.statusCode}: ${body.slice(0, 200)}`)
+              err.code = 'ha_http'
+              reject(err)
             }
           })
         }
@@ -291,13 +310,17 @@ class HomeAssistantProvider extends BaseProvider {
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
-        req.destroy(new Error('Tempo limite ao consultar o Home Assistant'))
+        const err = new Error('Tempo limite ao consultar o Home Assistant (servidor lento ou offline)')
+        err.code = 'ha_timeout'
+        req.destroy(err)
+        reject(err)
       }, 4000)
 
       req.on('error', (err) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        if (!err.code) err.code = 'ha_network'
         reject(err)
       })
 
@@ -332,8 +355,14 @@ class HomeAssistantProvider extends BaseProvider {
             clearTimeout(timer)
             if (res.statusCode >= 200 && res.statusCode < 300) {
               try { resolve(JSON.parse(body)) } catch { resolve(null) }
+            } else if (res.statusCode === 401 || res.statusCode === 403) {
+              const err = new Error(`Token do Home Assistant inválido ou expirado (HTTP ${res.statusCode})`)
+              err.code = 'ha_auth'
+              reject(err)
             } else {
-              reject(new Error(`HA API error ${res.statusCode}: ${body.slice(0, 200)}`))
+              const err = new Error(`HA API error ${res.statusCode}: ${body.slice(0, 200)}`)
+              err.code = 'ha_http'
+              reject(err)
             }
           })
         }
@@ -342,13 +371,17 @@ class HomeAssistantProvider extends BaseProvider {
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
-        req.destroy(new Error('Tempo limite ao chamar o Home Assistant'))
+        const err = new Error('Tempo limite ao chamar o Home Assistant (servidor lento ou offline)')
+        err.code = 'ha_timeout'
+        req.destroy(err)
+        reject(err)
       }, 4000)
 
       req.on('error', (err) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        if (!err.code) err.code = 'ha_network'
         reject(err)
       })
 
@@ -361,25 +394,48 @@ class HomeAssistantProvider extends BaseProvider {
     if (!this.token) {
       throw new Error('Home Assistant token is required')
     }
-    try {
-      const config = await this._get('/api/config')
-      this.connected = true
-      this._connectWebSocket()
-      return {
-        success: true,
-        message: `Conectado ao Home Assistant (${config.version || 'desconhecido'})`,
-        providerName: this.name,
-        version: config.version,
-        locationName: config.location_name
+    let config = null
+    let lastErr = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        config = await this._get('/api/config')
+        break
+      } catch (err) {
+        lastErr = err
+        if (err.code === 'ha_network' || err.code === 'ha_auth') break
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 200))
+        }
       }
-    } catch (err) {
-      this.connected = false
-      throw new Error(`Falha ao conectar ao Home Assistant em ${this.url}: ${err.message}`)
+    }
+    if (!config) {
+      const code = lastErr?.code
+      let friendly = `Falha ao conectar ao Home Assistant em ${this.url}: ${lastErr?.message || 'sem resposta'}`
+      if (code === 'ha_auth') {
+        friendly = 'Token do Home Assistant inválido ou expirado (HTTP 401). Gere um novo Long-Lived Access Token em: Perfil do usuário → Segurança → Tokens de Acesso de Longa Duração.'
+      } else if (code === 'ha_timeout') {
+        friendly = `O servidor Home Assistant em ${this.url} demorou demais para responder. Verifique se ele está ligado e acessível.`
+      } else if (code === 'ha_network') {
+        friendly = `Não foi possível acessar o servidor em ${this.url} (conexão recusada ou offline). Verifique se o Home Assistant está ligado, se a URL/IP está correto e se está na mesma rede.`
+      }
+      this._setConnected(false, friendly)
+      const err = new Error(friendly)
+      err.code = code || 'ha_error'
+      throw err
+    }
+    this._setConnected(true)
+    this._connectWebSocket()
+    return {
+      success: true,
+      message: `Conectado ao Home Assistant (${config.version || 'desconhecido'})`,
+      providerName: this.name,
+      version: config.version,
+      locationName: config.location_name
     }
   }
 
   async disconnect() {
-    this.connected = false
+    this._setConnected(false)
     this._closeWebSocket()
     this.cachedDevices.clear()
     return { success: true, message: 'Desconectado do Home Assistant' }
@@ -389,11 +445,14 @@ class HomeAssistantProvider extends BaseProvider {
     if (!this.connected && this.url && this.token) {
       try {
         await this.connect()
-      } catch {}
+      } catch (err) {
+        this._setConnected(false, err.message)
+      }
     }
 
     if (!this.connected) {
-      return Array.from(this.cachedDevices.values())
+      // Sem conexão ativa: não devolve cache obsoleto — a UI deve avisar o usuário.
+      return []
     }
 
     try {
@@ -409,10 +468,20 @@ class HomeAssistantProvider extends BaseProvider {
 
       this.cachedDevices.clear()
       devices.forEach((d) => this.cachedDevices.set(d.id, d))
+      this.lastError = null
       return devices
     } catch (err) {
+      // Se o token/servidor caiu ou deu 401, marca desconectado para a UI mostrar o card de reconexão.
+      if (err.code === 'ha_auth' || err.code === 'ha_network' || err.code === 'ha_timeout' || (err.message && err.message.includes('401'))) {
+        const errMsg = (err.code === 'ha_auth' || (err.message && err.message.includes('401')))
+          ? 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)'
+          : err.message
+        this._setConnected(false, errMsg)
+      } else {
+        this.lastError = err.message
+      }
       console.warn('[HAProvider] Erro ao listar dispositivos:', err.message)
-      return Array.from(this.cachedDevices.values())
+      return []
     }
   }
 
@@ -426,6 +495,10 @@ class HomeAssistantProvider extends BaseProvider {
       this.cachedDevices.set(device.id, device)
       return device
     } catch (err) {
+      if (err.code === 'ha_auth' || err.code === 'ha_network' || err.code === 'ha_timeout') {
+        this.connected = false
+        this.lastError = err.message
+      }
       console.warn('[HAProvider] Erro ao consultar estado do dispositivo:', err.message)
       return null
     }
@@ -876,3 +949,4 @@ class HomeAssistantProvider extends BaseProvider {
 }
 
 module.exports = HomeAssistantProvider
+

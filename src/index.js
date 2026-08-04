@@ -22,6 +22,10 @@ class MomAIHomeConnector extends EventEmitter {
       this.devices.on('state_changed', (data) => {
         this.emit('state_changed', data);
       });
+      this.devices.on('connection_changed', (data) => {
+        this.isConnected = Boolean(data?.connected);
+        this.emit('connection_changed', data);
+      });
     }
 
     this.isConnected = false;
@@ -47,15 +51,16 @@ class MomAIHomeConnector extends EventEmitter {
         const full = await this.tokenManager.getConnection(conn.id);
         if (!full || !full.config) continue;
 
+        if (!this.connections.some((c) => c.id === full.id)) {
+          this.connections.push({ id: full.id, type: full.providerType, name: full.name, email: full.email });
+        }
+
         try {
           const regRes = await this.devices.registerProvider(full.providerType, full.config);
           if (regRes && regRes.success !== false) {
-            if (!this.connections.some((c) => c.id === full.id)) {
-              this.connections.push({ id: full.id, type: full.providerType, name: full.name, email: full.email });
-            }
             this.isConnected = true;
           } else {
-            console.warn(`[MomAIHomeConnector] Provider ${conn.id} ignorado por falha na conexão:`, regRes?.error);
+            console.warn(`[MomAIHomeConnector] Provider ${conn.id} offline/falha na conexão:`, regRes?.error);
           }
         } catch (regErr) {
           console.warn(`[MomAIHomeConnector] Erro ao registrar provider para ${conn.id}:`, regErr.message);
@@ -106,11 +111,13 @@ class MomAIHomeConnector extends EventEmitter {
               this.connections.push({ id: conn.id, type: conn.type || 'homeassistant', name: conn.name || 'Home Assistant', email: conn.email || 'local' });
             }
             try {
-              await this.devices.registerProvider(conn.type || 'homeassistant', { url: conn.url, token: conn.token });
-              await this.tokenManager.saveConnection(conn.id, conn.type || 'homeassistant', { url: conn.url, token: conn.token }, conn.name || 'Home Assistant', conn.email || 'local');
-              this.isConnected = true;
+              const regRes = await this.devices.registerProvider(conn.type || 'homeassistant', { url: conn.url, token: conn.token });
+              if (regRes && regRes.success !== false) {
+                await this.tokenManager.saveConnection(conn.id, conn.type || 'homeassistant', { url: conn.url, token: conn.token }, conn.name || 'Home Assistant', conn.email || 'local');
+                this.isConnected = true;
+              }
             } catch (regErr) {
-              this.isConnected = true;
+              if (momai.log) momai.log(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}: ${regErr.message}`);
             }
           }
         }
@@ -123,9 +130,11 @@ class MomAIHomeConnector extends EventEmitter {
       try {
         const lastCreds = await this.tokenManager.getLastCredentials();
         if (lastCreds && lastCreds.url && lastCreds.token) {
+          if (!this.connections.some((c) => c.id === 'ha_last_creds')) {
+            this.connections.push({ id: 'ha_last_creds', type: 'homeassistant', name: lastCreds.name || 'Home Assistant', email: 'local' });
+          }
           const regRes = await this.devices.registerProvider('homeassistant', { url: lastCreds.url, token: lastCreds.token });
           if (regRes && regRes.success !== false) {
-            this.connections.push({ id: 'ha_last_creds', type: 'homeassistant', name: lastCreds.name || 'Home Assistant', email: 'local' });
             this.isConnected = true;
           }
         }
@@ -142,6 +151,8 @@ class MomAIHomeConnector extends EventEmitter {
 
   async connectToHomeAssistant(url, token, name, momai) {
     if (!url || !token) throw new Error('URL e token do Home Assistant são obrigatórios');
+    url = String(url).trim().replace(/\/+$/, '');
+    token = String(token).trim();
     const parsedUrl = new URL(url);
     if (!['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
       throw new Error('A URL deve usar HTTP ou HTTPS e não pode conter credenciais');
@@ -163,6 +174,25 @@ class MomAIHomeConnector extends EventEmitter {
 
     const connectionId = 'ha_' + Date.now();
     const result = await this.devices.registerProvider('homeassistant', { url, token });
+
+    if (!result || result.success === false) {
+      const code = result?.code;
+      const urlMsg = url ? ` em ${url}` : '';
+      if (code === 'ha_auth') {
+        throw new Error(
+          'Token do Home Assistant inválido ou expirado (HTTP 401). ' +
+          'Gere um novo Long-Lived Access Token em: Perfil do usuário → Segurança → Tokens de Acesso de Longa Duração, ' +
+          'e confira se a URL (ex.: http://192.168.1.10:8123) está correta.'
+        );
+      }
+      if (code === 'ha_timeout') {
+        throw new Error(`O servidor Home Assistant${urlMsg} demorou demais para responder. Verifique se ele está ligado e acessível na rede.`);
+      }
+      if (code === 'ha_network') {
+        throw new Error(`Não foi possível acessar o servidor${urlMsg} (conexão recusada ou offline). Verifique se o Home Assistant está ligado, se a URL/IP está correto e se está na mesma rede.`);
+      }
+      throw new Error(`Falha ao conectar ao Home Assistant: ${result?.error || ''}`);
+    }
 
     await this.tokenManager.saveConnection(
       connectionId,
@@ -378,14 +408,18 @@ class MomAIHomeConnector extends EventEmitter {
   }
 
   getStatus() {
+    const providerStatus = this.devices.getStatus();
+    const haProvider = providerStatus?.providers?.homeassistant;
+    const isProviderConnected = Boolean(providerStatus?.connected || haProvider?.connected);
     return {
-      connected: this.isConnected,
+      connected: this.isConnected && isProviderConnected,
       connections: this.connections.map((c) => ({
         id: c.id,
         type: c.type,
         name: c.name
       })),
-      providerStatus: this.devices.getStatus()
+      providerStatus,
+      lastError: providerStatus?.lastError || null
     };
   }
 }

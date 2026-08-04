@@ -515,6 +515,87 @@ export const SMART_HOME_CSS = `
   .sh-remote-icon-btn.main { background: #8b5cf6; color: #fff; border: none; }
   .sh-remote-icon-btn.main:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(139,92,246,0.4); }
   .sh-remote-icon-btn.main:active { transform: scale(0.88) translateY(2px); background: #7c3aed; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
+
+  /* Offline Badge & Reconnecting Card */
+  .sh-badge-offline {
+    background: rgba(239, 68, 68, 0.15) !important;
+    color: #fca5a5 !important;
+    border: 1px solid rgba(239, 68, 68, 0.3) !important;
+  }
+  .sh-badge-offline .sh-dot {
+    background: #ef4444 !important;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6) !important;
+    animation: none !important;
+  }
+
+  .sh-reconnect-container {
+    max-width: 580px;
+    margin: 32px auto 40px;
+    padding: 0 16px;
+    animation: shFadeIn 0.3s ease-out;
+  }
+
+  .sh-reconnect-card {
+    background: #1E1E23 !important;
+    border: none !important;
+    border-radius: 24px;
+    padding: 36px 28px;
+    text-align: center;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .sh-reconnect-icon-box {
+    width: 64px;
+    height: 64px;
+    border-radius: 20px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #f87171;
+    margin: 0 auto 20px;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+  }
+
+  .sh-reconnect-title {
+    font-size: 19px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 0 0 8px;
+    letter-spacing: -0.3px;
+  }
+
+  .sh-reconnect-sub {
+    font-size: 13.5px;
+    color: #cbd5e1;
+    line-height: 1.5;
+    margin: 0 0 18px;
+  }
+
+  .sh-reconnect-url-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 6px 14px;
+    border-radius: 9999px;
+    font-size: 12px;
+    color: #a78bfa;
+    font-family: monospace;
+    margin-bottom: 24px;
+  }
+
+  .sh-reconnect-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
 `
 
 export function SmartHomeStyles() {

@@ -444,6 +444,7 @@ export default function SmartHomePage() {
   const [connections, setConnections] = useState<Connection[]>([])
   const [devices, setDevices] = useState<Device[]>([])
   const [isConnected, setIsConnected] = useState(false)
+  const [hasSavedConnection, setHasSavedConnection] = useState(false)
   const [loading, setLoading] = useState(true)
 
   // Single filter state: 'controllable' | 'sensors' | room name
@@ -451,7 +452,7 @@ export default function SmartHomePage() {
 
   const [showConnectModal, setShowConnectModal] = useState(false)
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
-  const [haUrl, setHaUrl] = useState('')
+  const [haUrl, setHaUrl] = useState('http://homeassistant.local:8123')
   const [haToken, setHaToken] = useState('')
   const [showToken, setShowToken] = useState(false)
   const [connectError, setConnectError] = useState<string | null>(null)
@@ -462,12 +463,26 @@ export default function SmartHomePage() {
     loadStatus()
   }, [])
 
-  // Auto-sync every 10s to discover new devices added in Home Assistant
+  // Auto-sync every 5s to verify connection status & discover new devices
   useEffect(() => {
-    if (!isConnected) return
+    if (!hasSavedConnection) return
 
     const interval = setInterval(async () => {
       try {
+        const status = await api.getStatus()
+        const haProvider = status?.providerStatus?.providers?.homeassistant
+        const connected = Boolean(status?.connected && (haProvider?.connected !== false))
+
+        setIsConnected(connected)
+        if (!connected) {
+          setDevices([])
+          if (status?.lastError || haProvider?.error) {
+            setConnectError(status?.lastError || haProvider?.error || null)
+          }
+          return
+        }
+
+        setConnectError(null)
         const devs = await api.getDevices()
         if (Array.isArray(devs)) {
           const deduplicated = deduplicateDevicesByName(devs)
@@ -476,14 +491,14 @@ export default function SmartHomePage() {
       } catch (err) {
         console.warn('[SmartHome] Erro na sincronização periódica:', err)
       }
-    }, 10000)
+    }, 5000)
 
     return () => clearInterval(interval)
-  }, [isConnected])
+  }, [hasSavedConnection])
 
-  // Listen for real-time state_changed events via SSE stream
+  // Listen for real-time state_changed & connection_changed events via SSE stream
   useEffect(() => {
-    if (!isConnected) return
+    if (!hasSavedConnection) return
 
     let eventSource: EventSource | null = null
 
@@ -494,36 +509,50 @@ export default function SmartHomePage() {
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data)
-          if (payload.type === 'extension_event' && payload.eventType === 'state_changed') {
-            const updatedDevice: Device = payload.data?.device
-            if (updatedDevice && updatedDevice.id) {
-              setDevices((prevDevices) => {
-                const index = prevDevices.findIndex((d) => d.id === updatedDevice.id)
-                if (index >= 0) {
-                  const updated = [...prevDevices]
-                  updated[index] = {
-                    ...updated[index],
-                    ...updatedDevice,
-                    state: { ...updated[index].state, ...updatedDevice.state },
-                    attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
+          if (payload.type === 'extension_event') {
+            if (payload.eventType === 'connection_changed') {
+              const connected = Boolean(payload.data?.connected)
+              setIsConnected(connected)
+              if (!connected) {
+                setDevices([])
+                if (payload.data?.error) setConnectError(payload.data.error)
+              } else {
+                setConnectError(null)
+                api.getDevices().then((devs) => {
+                  if (Array.isArray(devs)) setDevices(deduplicateDevicesByName(devs))
+                }).catch(() => {})
+              }
+            } else if (payload.eventType === 'state_changed') {
+              const updatedDevice: Device = payload.data?.device
+              if (updatedDevice && updatedDevice.id) {
+                setDevices((prevDevices) => {
+                  const index = prevDevices.findIndex((d) => d.id === updatedDevice.id)
+                  if (index >= 0) {
+                    const updated = [...prevDevices]
+                    updated[index] = {
+                      ...updated[index],
+                      ...updatedDevice,
+                      state: { ...updated[index].state, ...updatedDevice.state },
+                      attributes: { ...updated[index].attributes, ...updatedDevice.attributes }
+                    }
+                    return updated
+                  } else {
+                    return deduplicateDevicesByName([...prevDevices, updatedDevice])
                   }
-                  return updated
-                } else {
-                  return deduplicateDevicesByName([...prevDevices, updatedDevice])
-                }
-              })
+                })
 
-              setSelectedDevice((prevSelected) => {
-                if (prevSelected && prevSelected.id === updatedDevice.id) {
-                  return {
-                    ...prevSelected,
-                    ...updatedDevice,
-                    state: { ...prevSelected.state, ...updatedDevice.state },
-                    attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
+                setSelectedDevice((prevSelected) => {
+                  if (prevSelected && prevSelected.id === updatedDevice.id) {
+                    return {
+                      ...prevSelected,
+                      ...updatedDevice,
+                      state: { ...prevSelected.state, ...updatedDevice.state },
+                      attributes: { ...prevSelected.attributes, ...updatedDevice.attributes }
+                    }
                   }
-                }
-                return prevSelected
-              })
+                  return prevSelected
+                })
+              }
             }
           }
         } catch (err) {
@@ -539,17 +568,28 @@ export default function SmartHomePage() {
         eventSource.close()
       }
     }
-  }, [isConnected])
+  }, [hasSavedConnection])
 
   const handleResync = async () => {
     if (isSyncing) return
     setIsSyncing(true)
     try {
-      const devs = await api.syncDevices()
-      const deduplicated = deduplicateDevicesByName(devs)
-      setDevices(deduplicated)
-    } catch (err) {
+      const status = await api.getStatus()
+      const haProvider = status?.providerStatus?.providers?.homeassistant
+      const connected = Boolean(status?.connected && (haProvider?.connected !== false))
+      setIsConnected(connected)
+      if (connected) {
+        setConnectError(null)
+        const devs = await api.syncDevices()
+        const deduplicated = deduplicateDevicesByName(devs)
+        setDevices(deduplicated)
+      } else {
+        setDevices([])
+        setConnectError(status?.lastError || haProvider?.error || 'Servidor indisponível ou offline')
+      }
+    } catch (err: any) {
       console.warn('[SmartHome] Erro na resincronização manual:', err)
+      setConnectError(err.message || 'Falha ao tentar reconectar')
     } finally {
       setIsSyncing(false)
     }
@@ -558,25 +598,46 @@ export default function SmartHomePage() {
   const fetchLastConnection = async () => {
     try {
       const last = await api.getLastConnection()
-      if (last && typeof last === 'object') {
-        if (last.url) setHaUrl(last.url)
+      if (last && typeof last === 'object' && last.url) {
+        setHaUrl(last.url)
         if (last.token) setHaToken(last.token)
+        setHasSavedConnection(true)
+      } else {
+        setHaUrl('http://homeassistant.local:8123')
       }
     } catch (err) {
       console.warn('[SmartHome] Erro ao buscar última conexão:', err)
+      setHaUrl('http://homeassistant.local:8123')
     }
   }
 
   const loadStatus = async () => {
     setLoading(true)
     try {
-      const status = await api.getStatus()
       const conns = await api.listConnections()
       setConnections(conns)
       await fetchLastConnection()
 
-      const hasConnections = Array.isArray(conns) && conns.length > 0
-      setIsConnected(Boolean(status?.connected || hasConnections))
+      if (conns && conns.length > 0) {
+        setHasSavedConnection(true)
+      }
+
+      const status = await api.getStatus()
+
+      // Só marca como conectado se o worker realmente conectou no HA.
+      const haProvider = status?.providerStatus?.providers?.homeassistant
+      const connected = Boolean(status?.connected && (haProvider?.connected !== false))
+      setIsConnected(connected)
+
+      // Mostra o erro real (token inválido / servidor offline) na tela de conexão.
+      if (!connected) {
+        setDevices([])
+        if (status?.lastError || haProvider?.error) {
+          setConnectError(status?.lastError || haProvider?.error || null)
+        }
+      } else {
+        setConnectError(null)
+      }
 
       const devs = await api.getDevices()
       const deduplicated = deduplicateDevicesByName(devs || [])
@@ -603,6 +664,7 @@ export default function SmartHomePage() {
       const result = await api.connectToHomeAssistant(haUrl.trim(), haToken.trim())
       if (result.success || result.ok) {
         setShowConnectModal(false)
+        setHasSavedConnection(true)
         await loadStatus()
       } else {
         setConnectError(result.message || result.error || 'Falha ao conectar')
@@ -617,6 +679,7 @@ export default function SmartHomePage() {
     try {
       setLoading(true)
       setIsConnected(false)
+      setHasSavedConnection(false)
       setDevices([])
       setConnections([])
       await api.disconnectAll().catch(() => {})
@@ -624,8 +687,8 @@ export default function SmartHomePage() {
       for (const c of conns) {
         await api.removeConnection(c.id).catch(() => {})
       }
-      await fetchLastConnection()
-      setShowConnectModal(true)
+      setHaUrl('http://homeassistant.local:8123')
+      setHaToken('')
     } catch (err) {
       console.warn('[SmartHome] Erro ao desconectar:', err)
     } finally {
@@ -760,7 +823,7 @@ export default function SmartHomePage() {
 
       {loading ? (
         <div className="sh-auth"><p style={{ color: '#94a3b8' }}>Carregando...</p></div>
-      ) : !isConnected ? (
+      ) : !hasSavedConnection ? (
         <div className="sh-auth">
           <div className="sh-auth-card">
             {/* Left Column: Branding & Features */}
@@ -871,7 +934,7 @@ export default function SmartHomePage() {
         </div>
       ) : (
         <>
-          {/* Header: Home Assistant Status & Disconnect Action */}
+          {/* Header: Home Assistant Status & Actions */}
           <div className="sh-header">
             <div className="sh-header-left">
               <div className="sh-logo-icon">
@@ -899,9 +962,9 @@ export default function SmartHomePage() {
                 <span>{isSyncing ? 'Sincronizando...' : 'Resincronizar'}</span>
               </button>
 
-              <div className="sh-badge">
+              <div className={`sh-badge ${!isConnected ? 'sh-badge-offline' : ''}`}>
                 <span className="sh-dot" />
-                <span>Home Assistant</span>
+                <span>{isConnected ? 'Home Assistant' : 'Offline'}</span>
               </div>
 
               <button className="sh-btn sh-btn-danger" onClick={handleDisconnectAll}>
@@ -911,152 +974,213 @@ export default function SmartHomePage() {
             </div>
           </div>
 
-          {/* Filter Bar right at top */}
-          {devices.length > 0 && (
-            <div className="sh-chips">
-              <button
-                className={`sh-chip ${activeFilter === 'controllable' ? 'active' : ''}`}
-                onClick={() => setActiveFilter('controllable')}
-              >
-                <SvgZap size={15} />
-                <span>Controláveis</span>
-                <span style={{ opacity: 0.7 }}>({controllableCount})</span>
-              </button>
+          {!isConnected ? (
+            /* RECONNECTING CARD WHEN HOME ASSISTANT IS OFFLINE */
+            <div className="sh-reconnect-container">
+              <div className="sh-reconnect-card">
+                <div className="sh-reconnect-icon-box">
+                  <SvgAlert size={28} color="#ef4444" />
+                </div>
+                <h2 className="sh-reconnect-title">Home Assistant Indisponível</h2>
+                <p className="sh-reconnect-sub">
+                  Não foi possível estabelecer conexão com o servidor. Verifique se o Home Assistant está ligado e acessível na rede.
+                </p>
 
-              <button
-                className={`sh-chip ${activeFilter === 'sensors' ? 'active' : ''}`}
-                onClick={() => setActiveFilter('sensors')}
-              >
-                <SvgSensor size={15} />
-                <span>Sensores & Status</span>
-                <span style={{ opacity: 0.7 }}>({sensorsCount})</span>
-              </button>
+                {haUrl && (
+                  <div className="sh-reconnect-url-tag">
+                    <SvgWifi size={13} color="#a78bfa" />
+                    <span>{haUrl}</span>
+                  </div>
+                )}
 
-              {rooms.map((room) => (
-                <button
-                  key={room}
-                  className={`sh-chip ${activeFilter === room ? 'active' : ''}`}
-                  onClick={() => setActiveFilter(room)}
-                >
-                  <SvgHome size={13} />
-                  <span>{room}</span>
-                </button>
-              ))}
-            </div>
-          )}
+                {connectError && (
+                  <div style={{
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    borderRadius: '12px',
+                    padding: '10px 14px',
+                    color: '#fca5a5',
+                    fontSize: '12px',
+                    marginBottom: '24px',
+                    textAlign: 'center',
+                    lineHeight: '1.4'
+                  }}>
+                    {connectError}
+                  </div>
+                )}
 
-          {/* MAIN DEVICES GRID AT THE TOP FOR FAST ACCESS */}
-          {filteredDevices.length === 0 ? (
-            <div className="sh-empty">
-              <div className="sh-empty-icon">
-                <SvgHome size={28} />
+                <div className="sh-reconnect-actions">
+                  <button
+                    className="sh-btn-primary"
+                    onClick={handleResync}
+                    disabled={isSyncing}
+                    style={{ padding: '10px 18px', fontSize: '13px' }}
+                  >
+                    <SvgRefresh size={15} className={isSyncing ? 'sh-spin' : ''} />
+                    <span>{isSyncing ? 'Tentando Reconectar...' : 'Tentar Reconectar Agora'}</span>
+                  </button>
+
+                  <button
+                    className="sh-btn sh-btn-danger"
+                    onClick={handleDisconnectAll}
+                    style={{ padding: '10px 16px', fontSize: '13px' }}
+                  >
+                    <SvgLogout size={15} />
+                    <span>Desconectar</span>
+                  </button>
+                </div>
               </div>
-              <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#f8fafc', margin: '0 0 6px' }}>
-                Nenhum dispositivo nesta categoria
-              </h3>
-              <p style={{ fontSize: '13.5px', color: '#94a3b8', maxWidth: '420px', margin: '0 auto', lineHeight: 1.5 }}>
-                Selecione outro filtro acima para visualizar seus dispositivos.
-              </p>
             </div>
           ) : (
-            <div className="sh-grid">
-              {filteredDevices.map((device) => {
-                if (device.domain === 'sun' || device.domain === 'weather') {
-                  return null
-                }
-
-                const domainLabel = DOMAIN_LABELS[device.domain] || device.type || device.domain
-                const dynamicSvgIcon = getDynamicSvgIcon(device, 18)
-                const formatted = formatEntityValue(device.state.value, device.state.unit, device.attributes.deviceClass as string || device.state.deviceClass)
-                const roomOrDomainSub = device.room ? `${device.room} • ${domainLabel}` : domainLabel
-
-                return (
-                  <div
-                    key={device.id}
-                    className={`sh-card ${device.state.on ? 'on' : ''} ${device.domain}`}
-                    onClick={() => {
-                      setSelectedDevice(device)
-                    }}
+            <>
+              {/* Filter Bar right at top */}
+              {devices.length > 0 && (
+                <div className="sh-chips">
+                  <button
+                    className={`sh-chip ${activeFilter === 'controllable' ? 'active' : ''}`}
+                    onClick={() => setActiveFilter('controllable')}
                   >
-                    <div className="sh-card-header">
-                      <div className="sh-icon">{dynamicSvgIcon}</div>
-                      <label className="sh-toggle" onClick={(e) => e.stopPropagation()}>
-                        {CONTROLLABLE_DOMAINS.includes(device.domain) && (
-                          <>
-                            <input type="checkbox" checked={device.state.on} onChange={() => toggleDevice(device)} />
-                            <span className="sh-slider" />
-                          </>
-                        )}
-                      </label>
-                    </div>
-                    <div className="sh-body">
-                      <h3 className="sh-name">{device.name}</h3>
-                      <p className="sh-sub">{roomOrDomainSub}</p>
-                      {device.domain === 'light' && device.state.on && device.state.brightness != null && (
-                        <>
-                          <div style={{ display: 'flex', justify: 'space-between', fontSize: '11px', color: '#38bdf8', fontWeight: 600, marginTop: '10px' }}>
-                            <span>Brilho</span><span>{device.state.brightness}%</span>
-                          </div>
-                          <div className="sh-bar" onClick={(e) => { e.stopPropagation(); setBrightness(device, device.state.brightness! > 50 ? 25 : 75) }}>
-                            <div className="sh-fill" style={{ width: `${device.state.brightness}%` }} />
-                          </div>
-                        </>
-                      )}
-                      {device.domain === 'climate' && (
-                        <div className="sh-temp">
-                          <button className="sh-temp-btn" onClick={(e) => { e.stopPropagation(); adjustTemp(device, -1) }}>-</button>
-                          <span style={{ fontSize: '17px', fontWeight: 700, color: '#38bdf8' }}>
-                            {device.state.targetTemperature || device.state.temperature || '--'}°C
-                          </span>
-                          <button className="sh-temp-btn" onClick={(e) => { e.stopPropagation(); adjustTemp(device, 1) }}>+</button>
-                          {device.state.temperature != null && <span style={{ fontSize: '12px', color: '#94a3b8' }}>atual: {device.state.temperature}°</span>}
+                    <SvgZap size={15} />
+                    <span>Controláveis</span>
+                    <span style={{ opacity: 0.7 }}>({controllableCount})</span>
+                  </button>
+
+                  <button
+                    className={`sh-chip ${activeFilter === 'sensors' ? 'active' : ''}`}
+                    onClick={() => setActiveFilter('sensors')}
+                  >
+                    <SvgSensor size={15} />
+                    <span>Sensores & Status</span>
+                    <span style={{ opacity: 0.7 }}>({sensorsCount})</span>
+                  </button>
+
+                  {rooms.map((room) => (
+                    <button
+                      key={room}
+                      className={`sh-chip ${activeFilter === room ? 'active' : ''}`}
+                      onClick={() => setActiveFilter(room)}
+                    >
+                      <SvgHome size={13} />
+                      <span>{room}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* MAIN DEVICES GRID AT THE TOP FOR FAST ACCESS */}
+              {filteredDevices.length === 0 ? (
+                <div className="sh-empty">
+                  <div className="sh-empty-icon">
+                    <SvgHome size={28} />
+                  </div>
+                  <h3 style={{ fontSize: '17px', fontWeight: 600, color: '#f8fafc', margin: '0 0 6px' }}>
+                    Nenhum dispositivo nesta categoria
+                  </h3>
+                  <p style={{ fontSize: '13.5px', color: '#94a3b8', maxWidth: '420px', margin: '0 auto', lineHeight: 1.5 }}>
+                    Selecione outro filtro acima para visualizar seus dispositivos.
+                  </p>
+                </div>
+              ) : (
+                <div className="sh-grid">
+                  {filteredDevices.map((device) => {
+                    if (device.domain === 'sun' || device.domain === 'weather') {
+                      return null
+                    }
+
+                    const domainLabel = DOMAIN_LABELS[device.domain] || device.type || device.domain
+                    const dynamicSvgIcon = getDynamicSvgIcon(device, 18)
+                    const formatted = formatEntityValue(device.state.value, device.state.unit, device.attributes.deviceClass as string || device.state.deviceClass)
+                    const roomOrDomainSub = device.room ? `${device.room} • ${domainLabel}` : domainLabel
+
+                    return (
+                      <div
+                        key={device.id}
+                        className={`sh-card ${device.state.on ? 'on' : ''} ${device.domain}`}
+                        onClick={() => {
+                          setSelectedDevice(device)
+                        }}
+                      >
+                        <div className="sh-card-header">
+                          <div className="sh-icon">{dynamicSvgIcon}</div>
+                          <label className="sh-toggle" onClick={(e) => e.stopPropagation()}>
+                            {CONTROLLABLE_DOMAINS.includes(device.domain) && (
+                              <>
+                                <input type="checkbox" checked={device.state.on} onChange={() => toggleDevice(device)} />
+                                <span className="sh-slider" />
+                              </>
+                            )}
+                          </label>
                         </div>
-                      )}
-                      {device.domain === 'sensor' && (
-                        <div style={{ marginTop: '8px' }}>
-                          <p style={{ fontSize: '15px', color: '#38bdf8', fontWeight: 700, margin: 0 }}>
-                            {formatted.primary}
-                          </p>
-                          {formatted.secondary && (
-                            <p style={{ fontSize: '11px', color: '#94a3b8', margin: '2px 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <SvgClock size={11} /> {formatted.secondary}
+                        <div className="sh-body">
+                          <h3 className="sh-name">{device.name}</h3>
+                          <p className="sh-sub">{roomOrDomainSub}</p>
+                          {device.domain === 'light' && device.state.on && device.state.brightness != null && (
+                            <>
+                              <div style={{ display: 'flex', justify: 'space-between', fontSize: '11px', color: '#38bdf8', fontWeight: 600, marginTop: '10px' }}>
+                                <span>Brilho</span><span>{device.state.brightness}%</span>
+                              </div>
+                              <div className="sh-bar" onClick={(e) => { e.stopPropagation(); setBrightness(device, device.state.brightness! > 50 ? 25 : 75) }}>
+                                <div className="sh-fill" style={{ width: `${device.state.brightness}%` }} />
+                              </div>
+                            </>
+                          )}
+                          {device.domain === 'climate' && (
+                            <div className="sh-temp">
+                              <button className="sh-temp-btn" onClick={(e) => { e.stopPropagation(); adjustTemp(device, -1) }}>-</button>
+                              <span style={{ fontSize: '17px', fontWeight: 700, color: '#38bdf8' }}>
+                                {device.state.targetTemperature || device.state.temperature || '--'}°C
+                              </span>
+                              <button className="sh-temp-btn" onClick={(e) => { e.stopPropagation(); adjustTemp(device, 1) }}>+</button>
+                              {device.state.temperature != null && <span style={{ fontSize: '12px', color: '#94a3b8' }}>atual: {device.state.temperature}°</span>}
+                            </div>
+                          )}
+                          {device.domain === 'sensor' && (
+                            <div style={{ marginTop: '8px' }}>
+                              <p style={{ fontSize: '15px', color: '#38bdf8', fontWeight: 700, margin: 0 }}>
+                                {formatted.primary}
+                              </p>
+                              {formatted.secondary && (
+                                <p style={{ fontSize: '11px', color: '#94a3b8', margin: '2px 0 0', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <SvgClock size={11} /> {formatted.secondary}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {device.domain === 'cover' && (
+                            <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>
+                              {device.state.isOpen ? 'Aberto' : 'Fechado'}{device.state.position != null ? ` (${device.state.position}%)` : ''}
+                            </p>
+                          )}
+                          {device.domain === 'lock' && (
+                            <p style={{ fontSize: '13px', color: device.state.locked ? '#34d399' : '#f87171', fontWeight: 600, marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {device.state.locked ? <><SvgLock size={13} color="#34d399" /> Trancado</> : <><SvgUnlock size={13} color="#f87171" /> Destrancado</>}
+                            </p>
+                          )}
+                          {device.domain === 'media_player' && device.state.mediaTitle && (
+                            <p style={{ fontSize: '12px', color: '#38bdf8', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <SvgPlay size={11} color="#38bdf8" /> {device.state.mediaTitle}
+                            </p>
+                          )}
+                          {device.domain === 'binary_sensor' && (
+                            <p style={{ fontSize: '13px', color: device.state.on ? '#f87171' : '#94a3b8', fontWeight: 600, marginTop: '8px' }}>
+                              {device.state.on ? 'Ativo' : 'Inativo'}
                             </p>
                           )}
                         </div>
-                      )}
-                      {device.domain === 'cover' && (
-                        <p style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>
-                          {device.state.isOpen ? 'Aberto' : 'Fechado'}{device.state.position != null ? ` (${device.state.position}%)` : ''}
-                        </p>
-                      )}
-                      {device.domain === 'lock' && (
-                        <p style={{ fontSize: '13px', color: device.state.locked ? '#34d399' : '#f87171', fontWeight: 600, marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          {device.state.locked ? <><SvgLock size={13} color="#34d399" /> Trancado</> : <><SvgUnlock size={13} color="#f87171" /> Destrancado</>}
-                        </p>
-                      )}
-                      {device.domain === 'media_player' && device.state.mediaTitle && (
-                        <p style={{ fontSize: '12px', color: '#38bdf8', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <SvgPlay size={11} color="#38bdf8" /> {device.state.mediaTitle}
-                        </p>
-                      )}
-                      {device.domain === 'binary_sensor' && (
-                        <p style={{ fontSize: '13px', color: device.state.on ? '#f87171' : '#94a3b8', fontWeight: 600, marginTop: '8px' }}>
-                          {device.state.on ? 'Ativo' : 'Inativo'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
-          {/* SECONDARY WIDGETS SECTION BELOW DEVICES */}
-          <div className="sh-widgets-grid">
-            <LiveClockWidget activeDevicesCount={activeDevicesTotal} totalDevicesCount={devices.length} />
-            {sunDevice && <SunWidget device={sunDevice} />}
-            {weatherDevice && <WeatherWidget device={weatherDevice} />}
-          </div>
+              {/* SECONDARY WIDGETS SECTION BELOW DEVICES */}
+              <div className="sh-widgets-grid">
+                <LiveClockWidget activeDevicesCount={activeDevicesTotal} totalDevicesCount={devices.length} />
+                {sunDevice && <SunWidget device={sunDevice} />}
+                {weatherDevice && <WeatherWidget device={weatherDevice} />}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
