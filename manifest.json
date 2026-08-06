@@ -21,8 +21,8 @@
   },
   "eventTypes": ["open_overlay", "state_changed", "connection_changed"],
   "theme": {
-    "gradient": ["#a78bfa", "#7c3aed"],
-    "accent": "#a78bfa"
+    "gradient": "from-violet-600 to-purple-500",
+    "accent": "violet"
   },
   "storage": {
     "description": "Armazena as conexões e tokens do Home Assistant localmente de forma isolada.",

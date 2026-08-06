@@ -4,3 +4,5 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+*.zip
+last_credentials.json
