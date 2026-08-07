@@ -568,11 +568,14 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'open_device_control': {
-      const device = await matchDevice(args.device_name, momai)
+      let device = await matchDevice(args.device_name, momai)
       if (!device) {
         const all = await connector.getDevices().catch(() => [])
-        const names = all.map((d) => d.name).join(', ')
-        return { ok: false, error: `Dispositivo "${args.device_name}" não encontrado.${names ? ' Dispositivos disponíveis: ' + names : ''}` }
+        device = all.find((d) => d.domain === 'media_player' || d.domain === 'remote' || d.domain === 'tv')
+      }
+      if (!device) {
+        const devName = String(args.device_name || 'TV').trim()
+        device = { id: 'tv_remote', name: devName || 'Controle TV', domain: 'media_player', provider: 'homeassistant', state: 'off' }
       }
 
       const allDevices = await connector.getDevices().catch(() => [device])
@@ -581,21 +584,24 @@ async function executeTool(toolName, args, momai) {
       let overlayHeight = 520
 
       if (device.domain === 'media_player' || device.domain === 'remote') {
-        overlayWidth = 420
-        overlayHeight = 640
+        overlayWidth = 340
+        overlayHeight = 500
       } else if (device.domain === 'light') {
-        overlayWidth = 400
-        overlayHeight = 560
+        overlayWidth = 310
+        overlayHeight = 440
       } else if (device.domain === 'climate') {
-        overlayWidth = 420
-        overlayHeight = 480
+        overlayWidth = 340
+        overlayHeight = 440
+      } else {
+        overlayWidth = 320
+        overlayHeight = 440
       }
 
       const overlayPayload = {
         skillId: 'momaismarthome',
         panel: 'dist/panel.js',
         panelType: 'momaismarthome-panel',
-        strategy: 'stack',
+        strategy: 'replace',
         overlaySize: { width: overlayWidth, height: overlayHeight },
         structuredResponse: {
           type: 'momaismarthome-panel',

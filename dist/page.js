@@ -1264,9 +1264,9 @@ var SMART_HOME_CSS = `
     background: rgba(24, 24, 28, 0.95);
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);
-    border: none !important;
-    border-radius: 28px; padding: 32px 28px;
-    max-width: 420px; width: 100%; box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 28px; padding: 24px 20px;
+    max-width: 100%; width: 100%; height: 100%; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     position: relative; box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
   }
@@ -1667,12 +1667,49 @@ function WeatherWidget({ device }) {
   const wind = device.state.windSpeed;
   return /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-widget" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-main" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-icon" }, getWeatherSvgIcon(state, 24, "#38bdf8")), /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("h3", { className: "sh-weather-name" }, device.name), /* @__PURE__ */ React4.createElement("p", { className: "sh-weather-state" }, state.replace("-", " ").toUpperCase())), temp != null && /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-temp" }, temp, "\xB0C")), /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-details" }, humidity != null && /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-detail" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-weather-detail-label" }, /* @__PURE__ */ React4.createElement(SvgDrop, { size: 11, color: "#38bdf8" }), " Umidade"), /* @__PURE__ */ React4.createElement("strong", null, humidity, "%")), pressure != null && /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-detail" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-weather-detail-label" }, /* @__PURE__ */ React4.createElement(SvgGauge, { size: 11, color: "#38bdf8" }), " Press\xE3o"), /* @__PURE__ */ React4.createElement("strong", null, pressure, " hPa")), wind != null && /* @__PURE__ */ React4.createElement("div", { className: "sh-weather-detail" }, /* @__PURE__ */ React4.createElement("span", { className: "sh-weather-detail-label" }, /* @__PURE__ */ React4.createElement(SvgWind, { size: 11, color: "#38bdf8" }), " Vento"), /* @__PURE__ */ React4.createElement("strong", null, wind, " km/h"))));
 }
+var CACHE_DEVICES_KEY = "momaismarthome:devices";
+var CACHE_CONNS_KEY = "momaismarthome:connections";
+var CACHE_CONNECTED_KEY = "momaismarthome:is_connected";
+var CACHE_HAS_SAVED_KEY = "momaismarthome:has_saved_conn";
 function SmartHomePage() {
-  const [connections, setConnections] = useState2([]);
-  const [devices, setDevices] = useState2([]);
-  const [isConnected, setIsConnected] = useState2(false);
-  const [hasSavedConnection, setHasSavedConnection] = useState2(false);
-  const [loading, setLoading] = useState2(true);
+  const [connections, setConnections] = useState2(() => {
+    try {
+      const saved = typeof localStorage !== "undefined" ? localStorage.getItem(CACHE_CONNS_KEY) : null;
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [devices, setDevices] = useState2(() => {
+    try {
+      const saved = typeof localStorage !== "undefined" ? localStorage.getItem(CACHE_DEVICES_KEY) : null;
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isConnected, setIsConnected] = useState2(() => {
+    try {
+      return typeof localStorage !== "undefined" && localStorage.getItem(CACHE_CONNECTED_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [hasSavedConnection, setHasSavedConnection] = useState2(() => {
+    try {
+      return typeof localStorage !== "undefined" && localStorage.getItem(CACHE_HAS_SAVED_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [loading, setLoading] = useState2(() => {
+    try {
+      const savedDevs = typeof localStorage !== "undefined" ? localStorage.getItem(CACHE_DEVICES_KEY) : null;
+      return !savedDevs;
+    } catch {
+      return true;
+    }
+  });
   const [activeFilter, setActiveFilter] = useState2("controllable");
   const [showConnectModal, setShowConnectModal] = useState2(false);
   const [selectedDevice, setSelectedDevice] = useState2(null);
@@ -1820,20 +1857,29 @@ function SmartHomePage() {
     }
   };
   const loadStatus = async () => {
-    setLoading(true);
+    if (devices.length === 0) {
+      setLoading(true);
+    }
     try {
       const conns = await api.listConnections();
-      setConnections(conns);
+      setConnections(conns || []);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(CACHE_CONNS_KEY, JSON.stringify(conns || []));
+      }
       await fetchLastConnection();
-      if (conns && conns.length > 0) {
-        setHasSavedConnection(true);
+      const hasSaved = Boolean(conns && conns.length > 0);
+      setHasSavedConnection(hasSaved);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(CACHE_HAS_SAVED_KEY, hasSaved ? "true" : "false");
       }
       const status = await api.getStatus();
       const haProvider = status?.providerStatus?.providers?.homeassistant;
       const connected = Boolean(status?.connected && haProvider?.connected !== false);
       setIsConnected(connected);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(CACHE_CONNECTED_KEY, connected ? "true" : "false");
+      }
       if (!connected) {
-        setDevices([]);
         if (status?.lastError || haProvider?.error) {
           setConnectError(status?.lastError || haProvider?.error || null);
         }
@@ -1843,6 +1889,9 @@ function SmartHomePage() {
       const devs = await api.getDevices();
       const deduplicated = deduplicateDevicesByName(devs || []);
       setDevices(deduplicated);
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(CACHE_DEVICES_KEY, JSON.stringify(deduplicated));
+      }
     } catch (err) {
       console.warn("[SmartHome] Erro ao carregar status:", err);
     } finally {

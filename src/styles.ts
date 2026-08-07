@@ -397,9 +397,9 @@ export const SMART_HOME_CSS = `
     background: rgba(24, 24, 28, 0.95);
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);
-    border: none !important;
-    border-radius: 28px; padding: 32px 28px;
-    max-width: 420px; width: 100%; box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 28px; padding: 24px 20px;
+    max-width: 100%; width: 100%; height: 100%; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     position: relative; box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
   }

@@ -440,12 +440,50 @@ function WeatherWidget({ device }: { device: Device }) {
   )
 }
 
+const CACHE_DEVICES_KEY = 'momaismarthome:devices'
+const CACHE_CONNS_KEY = 'momaismarthome:connections'
+const CACHE_CONNECTED_KEY = 'momaismarthome:is_connected'
+const CACHE_HAS_SAVED_KEY = 'momaismarthome:has_saved_conn'
+
 export default function SmartHomePage() {
-  const [connections, setConnections] = useState<Connection[]>([])
-  const [devices, setDevices] = useState<Device[]>([])
-  const [isConnected, setIsConnected] = useState(false)
-  const [hasSavedConnection, setHasSavedConnection] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [connections, setConnections] = useState<Connection[]>(() => {
+    try {
+      const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CACHE_CONNS_KEY) : null
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+  const [devices, setDevices] = useState<Device[]>(() => {
+    try {
+      const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CACHE_DEVICES_KEY) : null
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+  const [isConnected, setIsConnected] = useState<boolean>(() => {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(CACHE_CONNECTED_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
+  const [hasSavedConnection, setHasSavedConnection] = useState<boolean>(() => {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(CACHE_HAS_SAVED_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
+  const [loading, setLoading] = useState<boolean>(() => {
+    try {
+      const savedDevs = typeof localStorage !== 'undefined' ? localStorage.getItem(CACHE_DEVICES_KEY) : null
+      return !savedDevs
+    } catch {
+      return true
+    }
+  })
 
   // Single filter state: 'controllable' | 'sensors' | room name
   const [activeFilter, setActiveFilter] = useState<string>('controllable')
@@ -612,14 +650,21 @@ export default function SmartHomePage() {
   }
 
   const loadStatus = async () => {
-    setLoading(true)
+    if (devices.length === 0) {
+      setLoading(true)
+    }
     try {
       const conns = await api.listConnections()
-      setConnections(conns)
+      setConnections(conns || [])
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CACHE_CONNS_KEY, JSON.stringify(conns || []))
+      }
       await fetchLastConnection()
 
-      if (conns && conns.length > 0) {
-        setHasSavedConnection(true)
+      const hasSaved = Boolean(conns && conns.length > 0)
+      setHasSavedConnection(hasSaved)
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CACHE_HAS_SAVED_KEY, hasSaved ? 'true' : 'false')
       }
 
       const status = await api.getStatus()
@@ -628,10 +673,12 @@ export default function SmartHomePage() {
       const haProvider = status?.providerStatus?.providers?.homeassistant
       const connected = Boolean(status?.connected && (haProvider?.connected !== false))
       setIsConnected(connected)
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CACHE_CONNECTED_KEY, connected ? 'true' : 'false')
+      }
 
       // Mostra o erro real (token inválido / servidor offline) na tela de conexão.
       if (!connected) {
-        setDevices([])
         if (status?.lastError || haProvider?.error) {
           setConnectError(status?.lastError || haProvider?.error || null)
         }
@@ -642,6 +689,9 @@ export default function SmartHomePage() {
       const devs = await api.getDevices()
       const deduplicated = deduplicateDevicesByName(devs || [])
       setDevices(deduplicated)
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CACHE_DEVICES_KEY, JSON.stringify(deduplicated))
+      }
     } catch (err) {
       console.warn('[SmartHome] Erro ao carregar status:', err)
     } finally {

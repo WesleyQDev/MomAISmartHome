@@ -1,6 +1,6 @@
 ---
 name: MomAI Smart Home
-description: Controle dispositivos inteligentes da sua casa: luzes, temperatura, sensores, fechaduras, cortinas, câmeras e muito mais via Home Assistant.
+description: Controle dispositivos inteligentes da sua casa: luzes, TV e controle remoto, volume, temperatura, sensores, fechaduras, cortinas, câmeras e muito mais via Home Assistant. Use para abrir o controle/remoto de dispositivos (ex: "abra o controle da televisão", "abrir o controle da TV").
 author: MomAI Team
 version: 1.0.1
 icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5z"/><path d="M6.5 12a7.8 7.8 0 0 1 11 0"/><path d="M9 15a3.6 3.6 0 0 1 6 0"/><path d="M12 18h.01"/></svg>
@@ -185,7 +185,7 @@ tools:
           type: string
           description: Nome do dispositivo
   - name: open_device_control
-    description: Abre a interface de controle flutuante (overlay window) de um dispositivo específico (TV, controle remoto, lâmpada, ar condicionado, etc) quando o usuário pede para abrir ou exibir a tela de controle do dispositivo.
+    description: Abre a interface de controle flutuante (overlay window) de um dispositivo específico (TV, controle remoto, lâmpada, ar condicionado, etc) quando o usuário pede para abrir ou exibir a tela de controle do dispositivo. Use SEMPRE para pedidos como "abra o controle da televisão", "abrir o controle da TV", "mostrar o controle remoto", "abrir o painel do ar condicionado".
     parameters:
       type: object
       required:
@@ -197,3 +197,14 @@ tools:
 ---
 
 Integração completa com Home Assistant e suporte a múltiplos provedores de automação residencial. Controle cores de luzes, brilho, TV, controle remoto, volume, climatização, sensores e muito mais.
+
+## Como usar (gramática)
+
+- "abra o controle da televisão" / "abrir o controle da TV" / "mostrar o controle da tv" → `open_device_control { device_name: "televisão" }`
+- "aumenta o volume da TV" / "liga a televisão" / "muda para o canal 5" / "coloca na HDMI 1" / "abre a Netflix na TV" → `control_tv_remote` com o `device_name` da TV
+- "abaixa a temperatura" → `control_climate`
+- "liga a luz da sala" / "acende a luz" → `control_device`
+- "qual o estado da TV?" → `query_device`
+- "que dispositivos tenho na sala?" → `list_devices { room }`
+
+Se o usuário pedir para **abrir/mostrar o controle** de um dispositivo (TV, ar-condicionado, lâmpada, etc.), use `open_device_control` — NÃO use `control_device` nem `control_tv_remote` para isso.
