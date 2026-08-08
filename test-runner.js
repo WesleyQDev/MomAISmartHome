@@ -1,4 +1,7 @@
 process.env.DB_PATH = ':memory:'
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
 const MomAIHomeConnector = require('./src/index')
 
 async function runTests() {
@@ -57,6 +60,33 @@ async function runTests() {
   const afterDel = await tm.getConnection('test_ha')
   assert('removeConnection funciona', afterDel === null)
 
+  const BetterSqlite3 = require('better-sqlite3')
+  const migrationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momai-smarthome-migration-'))
+  const migrationPath = path.join(migrationDir, 'smarthome.sqlite')
+  const legacyDb = new BetterSqlite3(migrationPath)
+  legacyDb.exec(`CREATE TABLE connections (
+    id TEXT PRIMARY KEY,
+    provider_type TEXT NOT NULL,
+    name TEXT,
+    config_encrypted TEXT NOT NULL,
+    user_email TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`)
+  legacyDb.close()
+  const migratedDb = new DatabaseManager(migrationPath)
+  await migratedDb.init()
+  const migratedColumns = await migratedDb.all('PRAGMA table_info(connections)')
+  const migratedAutoConnect = migratedColumns.find((column) => column.name === 'auto_connect')
+  await migratedDb.run(
+    `INSERT INTO connections (id, provider_type, name, config_encrypted, user_email) VALUES (?, ?, ?, ?, ?)`,
+    ['migration_test', 'homeassistant', 'Migration HA', '{}', 'local']
+  )
+  const migratedRow = await migratedDb.get('SELECT auto_connect FROM connections WHERE id = ?', ['migration_test'])
+  assert('migração adiciona auto_connect com default ativo', migratedAutoConnect && migratedAutoConnect.dflt_value === '1' && migratedRow.auto_connect === 1)
+  await migratedDb.close()
+  fs.rmSync(migrationDir, { recursive: true, force: true })
+
   // Test 6: runtime.js tool export check
   const runtime = require('./runtime')
   assert('runtime.tools é array', Array.isArray(runtime.tools))
@@ -100,6 +130,77 @@ async function runTests() {
 
   const savedMock = await mockMomai.storage.get('connections')
   assert('momai.storage gravou conexão mock', savedMock && savedMock.ha_test && savedMock.ha_test.token === 'mock_token')
+
+  // Test 8a: explicit disconnect preserves the encrypted credential but disables auto-reconnect
+  const Connector = MomAIHomeConnector.MomAIHomeConnector
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momai-smarthome-'))
+  const isolatedDbPath = path.join(tempDir, 'smarthome.sqlite')
+  const isolatedConnector = new Connector({ dbPath: isolatedDbPath })
+  const isolatedStorageStore = new Map()
+  const isolatedMomai = {
+    storage: {
+      storageDir: tempDir,
+      async get(key) { return isolatedStorageStore.get(key) || null },
+      async set(key, val) { isolatedStorageStore.set(key, val) }
+    }
+  }
+  let providerRegistrations = 0
+  isolatedConnector.devices.disconnectAll = async () => isolatedConnector.devices.providers.clear()
+  isolatedConnector.devices.registerProvider = async () => {
+    providerRegistrations++
+    return { success: true }
+  }
+  isolatedConnector.devices.listDevices = async () => []
+
+  const firstResult = await isolatedConnector.connectToHomeAssistant('http://ha.local:8123', 'first-test-token', 'Test HA', isolatedMomai)
+  const firstRow = await isolatedConnector.dbManager.get('SELECT auto_connect FROM connections WHERE id = ?', [firstResult.connectionId])
+  assert('connectToHomeAssistant persiste conexão criptografada elegível', providerRegistrations === 1 && firstRow?.auto_connect === 1)
+
+  await isolatedConnector.disconnectAll(isolatedMomai)
+  const clearedLast = await isolatedMomai.storage.get('last_credentials')
+  const clearedConnections = await isolatedMomai.storage.get('connections')
+  const inactiveRow = await isolatedConnector.dbManager.get('SELECT auto_connect FROM connections WHERE id = ?', [firstResult.connectionId])
+  const preservedConnection = await isolatedConnector.tokenManager.getConnection(firstResult.connectionId)
+  assert('disconnectAll desativa auto-reconexão e preserva credencial', inactiveRow?.auto_connect === 0 && preservedConnection?.config.token === 'first-test-token')
+  assert('disconnectAll limpa storage e estado em memória', clearedLast === null && clearedConnections && Object.keys(clearedConnections).length === 0 && isolatedConnector.lastCredentials === null && isolatedConnector.auth.getToken() === '')
+
+  const restartedConnector = new Connector({ dbPath: isolatedDbPath })
+  let restartedRegistrations = 0
+  restartedConnector.devices.disconnectAll = async () => restartedConnector.devices.providers.clear()
+  restartedConnector.devices.registerProvider = async () => {
+    restartedRegistrations++
+    return { success: true }
+  }
+  restartedConnector.devices.listDevices = async () => []
+  await restartedConnector.init(isolatedMomai)
+  await restartedConnector.ensureConnected(isolatedMomai)
+  const restartedLastConnection = await restartedConnector.getLastConnection(isolatedMomai)
+  assert('reinício não registra provider após disconnect explícito', restartedRegistrations === 0 && (await restartedConnector.listConnections()).length === 0)
+  assert('getLastConnection recupera credencial inativa após reinício', restartedLastConnection.url === 'http://ha.local:8123' && restartedLastConnection.token === 'first-test-token')
+
+  const secondResult = await restartedConnector.connectToHomeAssistant('http://ha.local:8123', 'second-test-token', 'Test HA', isolatedMomai)
+  const secondRow = await restartedConnector.dbManager.get('SELECT auto_connect FROM connections WHERE id = ?', [secondResult.connectionId])
+  const secondPersistedConnection = await restartedConnector.tokenManager.getConnection(secondResult.connectionId)
+  assert('conectar novamente reativa auto-reconexão e preserva token', restartedRegistrations === 1 && secondRow?.auto_connect === 1 && secondPersistedConnection.config.token === 'second-test-token')
+  await isolatedConnector.disconnectAll(isolatedMomai)
+  await restartedConnector.dbManager.close()
+  await isolatedConnector.dbManager.close()
+  fs.rmSync(tempDir, { recursive: true, force: true })
+
+  const firstStorageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momai-smarthome-storage-a-'))
+  const secondStorageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momai-smarthome-storage-b-'))
+  const switchedConnector = new Connector({ dbPath: path.join(firstStorageDir, 'smarthome.sqlite') })
+  const secondDb = new DatabaseManager(path.join(secondStorageDir, 'smarthome.sqlite'))
+  const secondTokenManager = new TokenManager(secondDb)
+  secondTokenManager.reloadKey(secondStorageDir)
+  await secondTokenManager.saveConnection('switched_connection', 'homeassistant', { url: 'http://switched.local:8123', token: 'switched-token' }, 'Switched HA', 'local')
+  await switchedConnector.init({ storage: { storageDir: firstStorageDir } })
+  const switchedLastConnection = await switchedConnector.getLastConnection({ storage: { storageDir: secondStorageDir } })
+  assert('getLastConnection reabre o banco ao trocar storageDir', switchedLastConnection?.token === 'switched-token')
+  await switchedConnector.dbManager.close()
+  await secondDb.close()
+  fs.rmSync(firstStorageDir, { recursive: true, force: true })
+  fs.rmSync(secondStorageDir, { recursive: true, force: true })
 
   let eventDispatched = false
   let lastOverlayPayload = null
@@ -267,6 +368,23 @@ async function runTests() {
   const tm3 = new TokenManager(db)
   const connPersist = await tm3.getConnection('test_persist')
   assert('TokenManager recupera e descriptografa conexão em nova instância', connPersist && connPersist.config && connPersist.config.token === 'secret_token_123')
+
+  await db.run(
+    `INSERT INTO connections (id, provider_type, name, config_encrypted, user_email) VALUES (?, ?, ?, ?, ?)`,
+    ['legacy_plain', 'homeassistant', 'Legacy HA', JSON.stringify({ url: 'http://legacy.local:8123', token: 'legacy_token' }), 'local']
+  )
+  const legacyConnection = await tm.getConnection('legacy_plain')
+  const migratedLegacy = JSON.parse(await db.get(`SELECT config_encrypted FROM connections WHERE id = ?`, ['legacy_plain']).then((row) => row.config_encrypted))
+  assert('TokenManager lê e migra conexão legada plaintext', legacyConnection && legacyConnection.config.token === 'legacy_token' && migratedLegacy.encryptedData && migratedLegacy.iv && migratedLegacy.authTag)
+
+  const legacyTokenManager = new TokenManager(db)
+  legacyTokenManager.encryptionSecret = 'momai_home_connector_secret_32b'
+  await db.run(
+    `INSERT INTO connections (id, provider_type, name, config_encrypted, user_email) VALUES (?, ?, ?, ?, ?)`,
+    ['legacy_encrypted', 'homeassistant', 'Legacy Encrypted HA', JSON.stringify(legacyTokenManager.encrypt({ url: 'http://legacy.local:8123', token: 'legacy_encrypted_token' })), 'local']
+  )
+  const legacyEncryptedConnection = await tm.getConnection('legacy_encrypted')
+  assert('TokenManager lê e migra conexão legada criptografada', legacyEncryptedConnection && legacyEncryptedConnection.config.token === 'legacy_encrypted_token')
 
   // Test 12: listDevices tenta reconectar quando provido de URL e Token mas desconnectado
   const offlineProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })

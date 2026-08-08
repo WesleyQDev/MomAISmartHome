@@ -728,19 +728,25 @@ export default function SmartHomePage() {
   const handleDisconnectAll = async () => {
     try {
       setLoading(true)
+      const result = await api.disconnectAll()
+      if (result?.ok === false || result?.success === false) {
+        throw new Error(result.error || result.message || 'Falha ao desconectar')
+      }
       setIsConnected(false)
       setHasSavedConnection(false)
       setDevices([])
       setConnections([])
-      await api.disconnectAll().catch(() => {})
-      const conns = await api.listConnections().catch(() => [])
-      for (const c of conns) {
-        await api.removeConnection(c.id).catch(() => {})
+      setSelectedDevice(null)
+      setConnectError(null)
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(CACHE_CONNS_KEY)
+        localStorage.removeItem(CACHE_DEVICES_KEY)
+        localStorage.removeItem(CACHE_CONNECTED_KEY)
+        localStorage.removeItem(CACHE_HAS_SAVED_KEY)
       }
-      setHaUrl('http://homeassistant.local:8123')
-      setHaToken('')
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[SmartHome] Erro ao desconectar:', err)
+      setConnectError(err.message || 'Falha ao desconectar')
     } finally {
       setLoading(false)
     }

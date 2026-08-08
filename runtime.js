@@ -300,8 +300,6 @@ const hbInterval = setInterval(() => {
 }, 30000)
 if (typeof hbInterval.unref === 'function') hbInterval.unref()
 
-init()
-
 process.on('message', async (msg) => {
   if (msg.type === 'execute') {
     try {

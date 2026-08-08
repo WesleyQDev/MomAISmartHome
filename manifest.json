@@ -1,7 +1,7 @@
 {
   "id": "momaismarthome",
   "name": "MomAI Smart Home",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "kind": "packaged",
   "description": "Integração com Home Assistant e suporte a múltiplos provedores de automação residencial.",
   "icon_bg": "#8b5cf6",
@@ -25,7 +25,7 @@
     "accent": "violet"
   },
   "storage": {
-    "description": "Armazena as conexões e tokens do Home Assistant localmente de forma isolada.",
-    "locations": ["connections.json", "smarthome.sqlite"]
+    "description": "Armazena as conexões e credenciais do Home Assistant localmente de forma isolada. Desconectar desativa a auto-reconexão, mas preserva a credencial para uma nova conexão manual.",
+    "locations": ["smarthome.sqlite"]
   }
 }

@@ -79,72 +79,7 @@ class MomAIHomeConnector extends EventEmitter {
       return this.getStatus();
     }
 
-    if (momai?.storage) {
-      try {
-        if (momai.storage.storageDir && this.dbManager) {
-          const customDbPath = path.join(momai.storage.storageDir, 'smarthome.sqlite');
-          if (this.dbManager.dbPath !== customDbPath) {
-            this.dbManager.dbPath = customDbPath;
-          }
-          if (this.tokenManager && typeof this.tokenManager.reloadKey === 'function') {
-            this.tokenManager.reloadKey(momai.storage.storageDir);
-          }
-        }
-
-        const savedConns = await momai.storage.get('connections');
-        if (savedConns && typeof savedConns === 'object') {
-          const entries = Object.values(savedConns);
-          const sanitized = Object.fromEntries(entries.filter((conn) => conn?.id).map((conn) => [conn.id, {
-            id: conn.id,
-            type: conn.type || 'homeassistant',
-            name: conn.name || 'Home Assistant',
-            ...(conn.url ? { url: conn.url } : {}),
-            email: conn.email || 'local',
-            updatedAt: conn.updatedAt || Date.now()
-          }]));
-          if (Object.keys(sanitized).length > 0) {
-            await momai.storage.set('connections', sanitized);
-          }
-          for (const conn of entries) {
-            if (!conn?.url || !conn.token) continue;
-            if (!this.connections.some((c) => c.id === conn.id)) {
-              this.connections.push({ id: conn.id, type: conn.type || 'homeassistant', name: conn.name || 'Home Assistant', email: conn.email || 'local' });
-            }
-            try {
-              const regRes = await this.devices.registerProvider(conn.type || 'homeassistant', { url: conn.url, token: conn.token });
-              if (regRes && regRes.success !== false) {
-                await this.tokenManager.saveConnection(conn.id, conn.type || 'homeassistant', { url: conn.url, token: conn.token }, conn.name || 'Home Assistant', conn.email || 'local');
-                this.isConnected = true;
-              }
-            } catch (regErr) {
-              if (momai.log) momai.log(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}: ${regErr.message}`);
-            }
-          }
-        }
-      } catch (err) {
-        if (momai.log) momai.log(`[MomAIHomeConnector] Erro em momai.storage.get: ${err.message}`);
-      }
-    }
-
-    if (this.connections.length === 0 && this.tokenManager) {
-      try {
-        const lastCreds = await this.tokenManager.getLastCredentials();
-        if (lastCreds && lastCreds.url && lastCreds.token) {
-          if (!this.connections.some((c) => c.id === 'ha_last_creds')) {
-            this.connections.push({ id: 'ha_last_creds', type: 'homeassistant', name: lastCreds.name || 'Home Assistant', email: 'local' });
-          }
-          const regRes = await this.devices.registerProvider('homeassistant', { url: lastCreds.url, token: lastCreds.token });
-          if (regRes && regRes.success !== false) {
-            this.isConnected = true;
-          }
-        }
-      } catch (err) {}
-    }
-
-    if (!this._initialized || this.connections.length === 0) {
-      this._initialized = true;
-      await this.init(momai).catch(() => {});
-    }
+    await this.init(momai).catch(() => {});
 
     return this.getStatus();
   }
@@ -163,6 +98,9 @@ class MomAIHomeConnector extends EventEmitter {
         await this.dbManager.close();
       }
       this.dbManager.dbPath = customDbPath;
+      if (this.tokenManager && typeof this.tokenManager.reloadKey === 'function') {
+        this.tokenManager.reloadKey(momai.storage.storageDir);
+      }
     }
     await this.dbManager.init();
     const displayName = name || 'Home Assistant';
@@ -204,25 +142,6 @@ class MomAIHomeConnector extends EventEmitter {
 
     this.lastCredentials = { url, token, name: displayName };
 
-    if (momai?.storage) {
-      try {
-        await momai.storage.set('last_credentials', { url, token, name: displayName });
-        const existing = (await momai.storage.get('connections')) || {};
-        existing[connectionId] = {
-          id: connectionId,
-          type: 'homeassistant',
-          name: displayName,
-          url,
-          token,
-          email: 'local',
-          updatedAt: Date.now()
-        };
-        await momai.storage.set('connections', existing);
-      } catch (err) {
-        if (momai.log) momai.log(`[MomAIHomeConnector] Erro ao salvar em momai.storage: ${err.message}`);
-      }
-    }
-
     const entities = await this.devices.listDevices('homeassistant');
     await this.tokenManager.cacheEntities(connectionId, entities).catch(() => {});
 
@@ -241,6 +160,9 @@ class MomAIHomeConnector extends EventEmitter {
   async getLastConnection(momai) {
     if (momai?.storage?.storageDir && this.dbManager) {
       const customDbPath = path.join(momai.storage.storageDir, 'smarthome.sqlite');
+      if (this.dbManager.db && this.dbManager.dbPath !== customDbPath) {
+        await this.dbManager.close();
+      }
       if (this.dbManager.dbPath !== customDbPath) {
         this.dbManager.dbPath = customDbPath;
       }
@@ -249,23 +171,10 @@ class MomAIHomeConnector extends EventEmitter {
       }
     }
 
-    if (momai?.storage) {
-      try {
-        const lastCreds = await momai.storage.get('last_credentials');
-        if (lastCreds && typeof lastCreds === 'object' && (lastCreds.url || lastCreds.token)) {
-          return { url: lastCreds.url || '', token: lastCreds.token || '', name: lastCreds.name || '' };
-        }
-      } catch {}
-    }
-
-    if (this.lastCredentials && (this.lastCredentials.url || this.lastCredentials.token)) {
-      return { url: this.lastCredentials.url || '', token: this.lastCredentials.token || '', name: this.lastCredentials.name || '' };
-    }
-
     try {
-      const savedTokenCreds = await this.tokenManager.getLastCredentials();
-      if (savedTokenCreds && (savedTokenCreds.url || savedTokenCreds.token)) {
-        return { url: savedTokenCreds.url || '', token: savedTokenCreds.token || '', name: savedTokenCreds.name || '' };
+      const savedConnection = await this.tokenManager.getLastConnection();
+      if (savedConnection?.config) {
+        return { url: savedConnection.config.url || '', token: savedConnection.config.token || '', name: savedConnection.name || '' };
       }
     } catch {}
 
@@ -284,13 +193,14 @@ class MomAIHomeConnector extends EventEmitter {
       } catch {}
     }
 
+    if (this.lastCredentials && (this.lastCredentials.url || this.lastCredentials.token)) {
+      return { url: this.lastCredentials.url || '', token: this.lastCredentials.token || '', name: this.lastCredentials.name || '' };
+    }
+
     try {
-      const conns = await this.tokenManager.listConnections();
-      if (conns && conns.length > 0) {
-        const full = await this.tokenManager.getConnection(conns[0].id);
-        if (full && full.config) {
-          return { url: full.config.url || '', token: full.config.token || '', name: full.name || '' };
-        }
+      const savedTokenCreds = await this.tokenManager.getLastCredentials();
+      if (savedTokenCreds && (savedTokenCreds.url || savedTokenCreds.token)) {
+        return { url: savedTokenCreds.url || '', token: savedTokenCreds.token || '', name: savedTokenCreds.name || '' };
       }
     } catch {}
 
@@ -397,12 +307,15 @@ class MomAIHomeConnector extends EventEmitter {
       try {
         await momai.storage.set('connections', {});
       } catch {}
+      try {
+        await momai.storage.set('last_credentials', null);
+      } catch {}
     }
-    const savedConnections = await this.tokenManager.listConnections().catch(() => []);
-    for (const connection of savedConnections) {
-      await this.tokenManager.removeConnection(connection.id).catch(() => {});
-    }
+    await this.tokenManager.deactivateAllConnections().catch(() => {});
+    await this.tokenManager.clearLastCredentials().catch(() => {});
     this.connections = [];
+    this.lastCredentials = null;
+    this.auth.setCredentials('', '');
     this.isConnected = false;
     return { success: true, message: 'Todas as conexões encerradas.' };
   }

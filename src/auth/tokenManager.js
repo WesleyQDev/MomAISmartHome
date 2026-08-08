@@ -87,24 +87,19 @@ class TokenManager {
     const encryptedJson = JSON.stringify(encryptedObject);
 
     const sql = `
-      INSERT INTO connections (id, provider_type, name, config_encrypted, user_email, updated_at)
-      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO connections (id, provider_type, name, config_encrypted, user_email, auto_connect, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
         provider_type = excluded.provider_type,
         name = excluded.name,
         config_encrypted = excluded.config_encrypted,
         user_email = excluded.user_email,
+        auto_connect = 1,
         updated_at = CURRENT_TIMESTAMP;
     `;
 
     await this.dbManager.run(sql, [id, providerType, name, encryptedJson, email]);
 
-    try {
-      const dbDir = path.dirname(this.dbManager.dbPath);
-      if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-      const credsPath = path.join(dbDir, 'last_credentials.json');
-      fs.writeFileSync(credsPath, JSON.stringify({ url: config.url || '', token: config.token || '', name: name || '' }), 'utf8');
-    } catch {}
   }
 
   async getLastCredentials() {
@@ -117,6 +112,13 @@ class TokenManager {
       }
     } catch {}
     return null;
+  }
+
+  async clearLastCredentials() {
+    try {
+      const credsPath = path.join(path.dirname(this.dbManager.dbPath), 'last_credentials.json');
+      if (fs.existsSync(credsPath)) fs.unlinkSync(credsPath);
+    } catch {}
   }
 
   async getConnection(id) {
@@ -196,26 +198,34 @@ class TokenManager {
       name: row.name,
       email: row.user_email,
       config,
+      autoConnect: row.auto_connect === 1,
       updatedAt: row.updated_at
     };
   }
 
   async listConnections() {
     await this.dbManager.init();
-    const rows = await this.dbManager.all(`SELECT id, provider_type, name, user_email, updated_at FROM connections ORDER BY updated_at DESC`);
-    if (rows && rows.length > 0) return rows;
+    return this.dbManager.all(
+      `SELECT id, provider_type, name, user_email, auto_connect, updated_at
+       FROM connections
+       WHERE auto_connect = 1
+       ORDER BY updated_at DESC, rowid DESC`
+    );
+  }
 
-    const lastCreds = await this.getLastCredentials();
-    if (lastCreds && lastCreds.url) {
-      return [{
-        id: 'ha_last_creds',
-        provider_type: 'homeassistant',
-        name: lastCreds.name || 'Home Assistant',
-        user_email: 'local',
-        updated_at: new Date().toISOString()
-      }];
-    }
-    return [];
+  async getLastConnection() {
+    await this.dbManager.init();
+    const row = await this.dbManager.get(
+      `SELECT id FROM connections ORDER BY updated_at DESC, rowid DESC LIMIT 1`
+    );
+    return row ? this.getConnection(row.id) : null;
+  }
+
+  async deactivateAllConnections() {
+    await this.dbManager.init();
+    await this.dbManager.run(`DELETE FROM cached_entities`);
+    await this.dbManager.run(`DELETE FROM rooms`);
+    await this.dbManager.run(`UPDATE connections SET auto_connect = 0`);
   }
 
   async removeConnection(id) {

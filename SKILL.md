@@ -2,7 +2,7 @@
 name: MomAI Smart Home
 description: Controle dispositivos inteligentes da sua casa: luzes, TV e controle remoto, volume, temperatura, sensores, fechaduras, cortinas, câmeras e muito mais via Home Assistant. Use para abrir o controle/remoto de dispositivos (ex: "abra o controle da televisão", "abrir o controle da TV").
 author: MomAI Team
-version: 1.0.1
+version: 1.0.19
 icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5z"/><path d="M6.5 12a7.8 7.8 0 0 1 11 0"/><path d="M9 15a3.6 3.6 0 0 1 6 0"/><path d="M12 18h.01"/></svg>
 compatibility: MomAI Node Core
 tags:
@@ -197,6 +197,8 @@ tools:
 ---
 
 Integração completa com Home Assistant e suporte a múltiplos provedores de automação residencial. Controle cores de luzes, brilho, TV, controle remoto, volume, climatização, sensores e muito mais.
+
+As credenciais são armazenadas localmente de forma criptografada no SQLite. Ao usar **Desconectar**, a extensão encerra a conexão, remove os caches e desativa a auto-reconexão, mas preserva a URL e o token para reconectar manualmente pelo formulário.
 
 ## Como usar (gramática)
 

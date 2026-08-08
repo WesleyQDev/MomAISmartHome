@@ -35,6 +35,7 @@ class DatabaseManager {
         name TEXT,
         config_encrypted TEXT NOT NULL,
         user_email TEXT,
+        auto_connect INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
@@ -69,6 +70,11 @@ class DatabaseManager {
 
     for (const query of queries) {
       await this.run(query);
+    }
+
+    const columns = await this.all(`PRAGMA table_info(connections)`);
+    if (!columns.some((column) => column.name === 'auto_connect')) {
+      await this.run(`ALTER TABLE connections ADD COLUMN auto_connect INTEGER NOT NULL DEFAULT 1`);
     }
   }
 
