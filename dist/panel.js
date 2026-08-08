@@ -1438,32 +1438,10 @@ function SmartHomePanel(props) {
   const data = props?.data || props;
   const device = data?.device;
   const handleClose = () => {
-    let closed = false;
-    if (typeof props?.onClose === "function") {
+    const closeOverlay = window?.momaiAPI?.closeOverlay || window?.api?.closeOverlay;
+    if (typeof closeOverlay === "function") {
       try {
-        props.onClose();
-        closed = true;
-      } catch {
-      }
-    }
-    if (!closed && typeof data?.onClose === "function") {
-      try {
-        data.onClose();
-        closed = true;
-      } catch {
-      }
-    }
-    if (typeof window.momaiAPI?.closeOverlay === "function") {
-      try {
-        ;
-        window.momaiAPI.closeOverlay();
-      } catch {
-      }
-    }
-    if (typeof window.api?.closeOverlay === "function") {
-      try {
-        ;
-        window.api.closeOverlay();
+        closeOverlay({ overlayId: device?.id });
       } catch {
       }
     }

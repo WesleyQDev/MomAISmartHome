@@ -7,27 +7,12 @@ export function SmartHomePanel(props: any) {
   const device = data?.device
 
   const handleClose = () => {
-    let closed = false
-    if (typeof props?.onClose === 'function') {
+    // Fecha apenas a overlay deste device (device.id) — um único IPC. Chamadas
+    // redundantes ou sem id faziam o host fechar também a última overlay criada.
+    const closeOverlay = (window as any)?.momaiAPI?.closeOverlay || (window as any)?.api?.closeOverlay
+    if (typeof closeOverlay === 'function') {
       try {
-        props.onClose()
-        closed = true
-      } catch {}
-    }
-    if (!closed && typeof data?.onClose === 'function') {
-      try {
-        data.onClose()
-        closed = true
-      } catch {}
-    }
-    if (typeof (window as any).momaiAPI?.closeOverlay === 'function') {
-      try {
-        ;(window as any).momaiAPI.closeOverlay()
-      } catch {}
-    }
-    if (typeof (window as any).api?.closeOverlay === 'function') {
-      try {
-        ;(window as any).api.closeOverlay()
+        closeOverlay({ overlayId: device?.id })
       } catch {}
     }
   }

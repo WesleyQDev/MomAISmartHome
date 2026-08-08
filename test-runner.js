@@ -102,10 +102,14 @@ async function runTests() {
   assert('momai.storage gravou conexão mock', savedMock && savedMock.ha_test && savedMock.ha_test.token === 'mock_token')
 
   let eventDispatched = false
+  let lastOverlayPayload = null
   const mockMomaiWithEvent = {
     ...mockMomai,
-    sendEvent(type) {
-      if (type === 'open_overlay') eventDispatched = true
+    sendEvent(type, payload) {
+      if (type === 'open_overlay') {
+        eventDispatched = true
+        lastOverlayPayload = payload
+      }
     }
   }
 
@@ -129,6 +133,8 @@ async function runTests() {
 
   assert('open_device_control com objeto único desempacota e executa', openRes && openRes.ok === true)
   assert('open_device_control dispara momai.sendEvent(open_overlay)', eventDispatched === true)
+  assert('open_device_control usa strategy replace (um único overlay)', lastOverlayPayload && lastOverlayPayload.strategy === 'replace')
+  assert('open_device_control envia overlayId do dispositivo', lastOverlayPayload && lastOverlayPayload.overlayId === 'media_player.tv_quarto')
 
   let toggled = false
   MomAIHomeConnector.devices.providers.set('homeassistant', {

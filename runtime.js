@@ -580,20 +580,20 @@ async function executeTool(toolName, args, momai) {
 
       const allDevices = await connector.getDevices().catch(() => [device])
 
-      let overlayWidth = 440
+      let overlayWidth = 380
       let overlayHeight = 520
 
       if (device.domain === 'media_player' || device.domain === 'remote') {
-        overlayWidth = 340
+        overlayWidth = 300
         overlayHeight = 500
       } else if (device.domain === 'light') {
-        overlayWidth = 310
+        overlayWidth = 280
         overlayHeight = 440
       } else if (device.domain === 'climate') {
-        overlayWidth = 340
+        overlayWidth = 300
         overlayHeight = 440
       } else {
-        overlayWidth = 320
+        overlayWidth = 280
         overlayHeight = 440
       }
 
@@ -602,6 +602,7 @@ async function executeTool(toolName, args, momai) {
         panel: 'dist/panel.js',
         panelType: 'momaismarthome-panel',
         strategy: 'replace',
+        overlayId: device.id,
         overlaySize: { width: overlayWidth, height: overlayHeight },
         structuredResponse: {
           type: 'momaismarthome-panel',
@@ -645,8 +646,13 @@ async function executeTool(toolName, args, momai) {
         ? args.device_name.trim()
         : ''
       const all = args?.all === true
+      let deviceId = ''
+      if (deviceName) {
+        const dev = await matchDevice(deviceName, momai).catch(() => null)
+        deviceId = dev?.id || ''
+      }
       try {
-        dispatchEvent('close_overlay', { skillId: 'momaismarthome', device_name: deviceName, all })
+        dispatchEvent('close_overlay', { skillId: 'momaismarthome', device_name: deviceName, overlay_id: deviceId, all })
       } catch (err) {
         console.warn('[runtime] Erro ao enviar close_overlay:', err)
       }
