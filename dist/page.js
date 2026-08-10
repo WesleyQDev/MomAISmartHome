@@ -1671,6 +1671,470 @@ var CACHE_DEVICES_KEY = "momaismarthome:devices";
 var CACHE_CONNS_KEY = "momaismarthome:connections";
 var CACHE_CONNECTED_KEY = "momaismarthome:is_connected";
 var CACHE_HAS_SAVED_KEY = "momaismarthome:has_saved_conn";
+var SH_TOOL_LABELS = {
+  send_message: "Enviar mensagem",
+  control_device: "Controlar dispositivo",
+  set_light_color: "Cor da luz",
+  control_tv_remote: "Controle da TV",
+  control_climate: "Controlar clima",
+  call_ha_service: "Servi\xE7o da casa",
+  list_devices: "Listar dispositivos",
+  query_device: "Consultar dispositivo",
+  capture_snapshot: "Capturar print",
+  start_monitoring: "Iniciar monitoramento",
+  list_contacts: "Listar contatos",
+  get_history: "Hist\xF3rico"
+};
+var SH_PARAM_LABELS = {
+  contact: "Contato ou n\xFAmero",
+  message: "Mensagem",
+  image: "Imagem",
+  device_name: "Dispositivo",
+  action: "A\xE7\xE3o",
+  brightness: "Brilho",
+  color: "Cor",
+  temperature: "Temperatura",
+  domain: "Dom\xEDnio",
+  service: "Servi\xE7o",
+  data: "Dados",
+  room: "C\xF4modo",
+  cameraId: "C\xE2mera",
+  monitorId: "Monitor",
+  label: "R\xF3tulo"
+};
+var SH_PLACEHOLDERS = [
+  { token: "{deviceName}", label: "Dispositivo" },
+  { token: "{deviceState}", label: "Estado" },
+  { token: "{deviceRoom}", label: "C\xF4modo" },
+  { token: "{entityId}", label: "Entidade" },
+  { token: "{event.imageDataUri}", label: "Imagem" }
+];
+var SH_ENTITY_PARAMS = /* @__PURE__ */ new Set(["contact", "device_name", "cameraId", "monitorId"]);
+function shHumanize(key) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function shFormatArgs(args) {
+  if (!args) return "";
+  return Object.entries(args).filter(([, v]) => !(typeof v === "string" && !v.trim())).map(([k, v]) => {
+    const val = v && typeof v === "object" ? JSON.stringify(v) : String(v);
+    return `${SH_PARAM_LABELS[k] || shHumanize(k)}: ${val}`;
+  }).join(" \xB7 ");
+}
+function AutomationsModal({ open, onClose }) {
+  const [catalog, setCatalog] = useState2([]);
+  const [actions, setActions] = useState2([]);
+  const [loading, setLoading] = useState2(true);
+  const [saving, setSaving] = useState2(false);
+  const [showDraft, setShowDraft] = useState2(false);
+  const [target, setTarget] = useState2("");
+  const [tool, setTool] = useState2("");
+  const [draftArgs, setDraftArgs] = useState2({});
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setShowDraft(false);
+    Promise.all([
+      extFetch("/extensions"),
+      sendCommand("get_actions")
+    ]).then(([cat, act]) => {
+      const installed = (cat || []).filter(
+        (e) => e.installed !== false && e.enabled !== false && Array.isArray(e.tools) && e.tools.length > 0
+      );
+      setCatalog(installed);
+      setActions(act?.actions || []);
+      if (installed.length > 0) setTarget((prev) => prev || installed[0].id);
+    }).catch(() => {
+    }).finally(() => setLoading(false));
+  }, [open]);
+  const targetExt = catalog.find((e) => e.id === target);
+  const toolDef = targetExt?.tools?.find((t) => t.name === tool);
+  const props = toolDef?.parameters?.properties || {};
+  function selectTarget(next) {
+    setTarget(next);
+    const ext = catalog.find((e) => e.id === next);
+    const first = ext?.tools?.find((t) => t.name !== "get_actions" && t.name !== "set_actions") || ext?.tools?.[0];
+    setTool(first?.name || "");
+    setDraftArgs(first ? defaultArgsFor(first) : {});
+  }
+  function selectTool(next) {
+    setTool(next);
+    setDraftArgs(defaultArgsFor(targetExt?.tools?.find((t) => t.name === next)));
+  }
+  function defaultArgsFor(def) {
+    const out = {};
+    for (const [key, param] of Object.entries(def?.parameters?.properties || {})) {
+      out[key] = param && param.default !== void 0 ? param.default : "";
+    }
+    return out;
+  }
+  function addAction() {
+    if (!target || !tool) return;
+    const clean = {};
+    for (const [key, value] of Object.entries(draftArgs)) {
+      if (typeof value === "string" && !value.trim()) continue;
+      clean[key] = value;
+    }
+    setActions((prev) => [
+      ...prev,
+      { id: `act-${Date.now()}`, target, tool, args: Object.keys(clean).length ? clean : void 0 }
+    ]);
+    setShowDraft(false);
+  }
+  async function save() {
+    setSaving(true);
+    try {
+      await sendCommand("set_actions", { actions });
+      onClose();
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  }
+  if (!open) return null;
+  return /* @__PURE__ */ React4.createElement(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 200,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        background: "rgba(0,0,0,0.7)",
+        backdropFilter: "blur(4px)"
+      }
+    },
+    /* @__PURE__ */ React4.createElement(
+      "div",
+      {
+        style: {
+          width: "100%",
+          maxWidth: 480,
+          background: "#18181b",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: 16,
+          boxShadow: "0 20px 50px rgba(0,0,0,0.5)",
+          display: "flex",
+          flexDirection: "column",
+          maxHeight: "90vh",
+          overflow: "hidden"
+        }
+      },
+      /* @__PURE__ */ React4.createElement(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "16px 20px",
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
+            background: "#09090b"
+          }
+        },
+        /* @__PURE__ */ React4.createElement("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "#fff" } }, "Automa\xE7\xF5es"),
+        /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            onClick: onClose,
+            style: { background: "transparent", border: "none", color: "#a1a1aa", cursor: "pointer", fontSize: 20 },
+            "aria-label": "Fechar"
+          },
+          "\xD7"
+        )
+      ),
+      /* @__PURE__ */ React4.createElement("div", { style: { padding: 20, display: "flex", flexDirection: "column", gap: 16, overflowY: "auto" } }, /* @__PURE__ */ React4.createElement("p", { style: { margin: 0, fontSize: 12, color: "#a1a1aa" } }, "A\xE7\xF5es executadas automaticamente quando um dispositivo mudar de estado (ex.: luz ligou \u2192 Vision tira um print)."), loading ? /* @__PURE__ */ React4.createElement("p", { style: { margin: 0, fontSize: 12, color: "#71717a" } }, "Carregando\u2026") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React4.createElement("span", { style: { fontSize: 12, fontWeight: 600, color: "#d4d4d8" } }, "A\xE7\xF5es"), /* @__PURE__ */ React4.createElement(
+        "button",
+        {
+          onClick: () => setShowDraft((v) => !v),
+          style: {
+            fontSize: 11,
+            fontWeight: 500,
+            color: "#34d399",
+            background: "transparent",
+            border: "1px solid rgba(52,211,153,0.3)",
+            borderRadius: 8,
+            padding: "4px 10px",
+            cursor: "pointer"
+          }
+        },
+        showDraft ? "Cancelar" : "+ Adicionar a\xE7\xE3o"
+      )), actions.length === 0 && !showDraft ? /* @__PURE__ */ React4.createElement("p", { style: { margin: 0, fontSize: 11, color: "#71717a" } }, "Nenhuma automa\xE7\xE3o. Campos dispon\xEDveis:", " ", SH_PLACEHOLDERS.map((p) => p.token).join(", ")) : null, actions.map((a, i) => /* @__PURE__ */ React4.createElement(
+        "div",
+        {
+          key: a.id || i,
+          style: {
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 8,
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 12,
+            padding: "8px 12px"
+          }
+        },
+        /* @__PURE__ */ React4.createElement("div", { style: { minWidth: 0 } }, /* @__PURE__ */ React4.createElement("div", { style: { fontSize: 12, fontWeight: 500, color: "#f4f4f5" } }, catalog.find((e) => e.id === a.target)?.name || a.target, /* @__PURE__ */ React4.createElement("span", { style: { color: "#a1a1aa" } }, " / "), SH_TOOL_LABELS[a.tool] || shHumanize(a.tool)), a.args && Object.keys(a.args).length > 0 ? /* @__PURE__ */ React4.createElement("div", { style: { fontSize: 11, color: "#71717a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, shFormatArgs(a.args)) : null),
+        /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            onClick: () => setActions(actions.filter((_, j) => j !== i)),
+            style: { background: "transparent", border: "none", color: "#71717a", cursor: "pointer", fontSize: 14 },
+            "aria-label": "Remover"
+          },
+          "\xD7"
+        )
+      )), showDraft ? /* @__PURE__ */ React4.createElement(
+        "div",
+        {
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 12,
+            padding: 12
+          }
+        },
+        /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("label", { style: { display: "block", fontSize: 11, fontWeight: 600, color: "#a1a1aa", marginBottom: 4 } }, "Extens\xE3o alvo"), /* @__PURE__ */ React4.createElement(
+          "select",
+          {
+            value: target,
+            onChange: (e) => selectTarget(e.target.value),
+            style: shSelectStyle
+          },
+          catalog.length === 0 ? /* @__PURE__ */ React4.createElement("option", { value: "" }, "Nenhuma extens\xE3o com a\xE7\xF5es instalada") : null,
+          catalog.map((ext) => /* @__PURE__ */ React4.createElement("option", { key: ext.id, value: ext.id }, ext.name || ext.id))
+        )),
+        toolDef ? /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("div", null, /* @__PURE__ */ React4.createElement("label", { style: { display: "block", fontSize: 11, fontWeight: 600, color: "#a1a1aa", marginBottom: 4 } }, "A\xE7\xE3o"), /* @__PURE__ */ React4.createElement(
+          "select",
+          {
+            value: tool,
+            onChange: (e) => selectTool(e.target.value),
+            style: shSelectStyle
+          },
+          targetExt?.tools?.filter((t) => t.name !== "get_actions" && t.name !== "set_actions").map((t) => /* @__PURE__ */ React4.createElement("option", { key: t.name, value: t.name }, SH_TOOL_LABELS[t.name] || shHumanize(t.name)))
+        )), /* @__PURE__ */ React4.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, Object.entries(props).map(([key, param]) => /* @__PURE__ */ React4.createElement("div", { key }, /* @__PURE__ */ React4.createElement("label", { style: { display: "block", fontSize: 11, fontWeight: 600, color: "#a1a1aa", marginBottom: 4 } }, SH_PARAM_LABELS[key] || shHumanize(key), param?.default !== void 0 ? " (pr\xE9-preenchido)" : ""), param?.enum ? /* @__PURE__ */ React4.createElement(
+          "select",
+          {
+            value: String(draftArgs[key] ?? ""),
+            onChange: (e) => setDraftArgs((d) => ({ ...d, [key]: e.target.value })),
+            style: shSelectStyle
+          },
+          param.enum.map((opt) => /* @__PURE__ */ React4.createElement("option", { key: opt, value: opt }, opt))
+        ) : SH_ENTITY_PARAMS.has(key) ? /* @__PURE__ */ React4.createElement(
+          ShSearchableInput,
+          {
+            target,
+            paramKey: key,
+            value: String(draftArgs[key] ?? ""),
+            onChange: (v) => setDraftArgs((d) => ({ ...d, [key]: v }))
+          }
+        ) : /* @__PURE__ */ React4.createElement(
+          "input",
+          {
+            type: "text",
+            value: String(draftArgs[key] ?? ""),
+            onChange: (e) => setDraftArgs((d) => ({ ...d, [key]: e.target.value })),
+            placeholder: param?.description || "",
+            style: shInputStyle
+          }
+        )))), /* @__PURE__ */ React4.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, SH_PLACEHOLDERS.map((p) => /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            key: p.token,
+            onClick: () => setDraftArgs((d) => {
+              const firstEmpty = Object.keys(props).find((k) => !String(d[k] ?? "").trim());
+              if (!firstEmpty) return d;
+              return { ...d, [firstEmpty]: p.token };
+            }),
+            style: {
+              fontSize: 10,
+              color: "#a1a1aa",
+              background: "transparent",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 8,
+              padding: "2px 8px",
+              cursor: "pointer"
+            }
+          },
+          p.label,
+          " ",
+          p.token
+        ))), /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            onClick: addAction,
+            style: {
+              fontSize: 11,
+              fontWeight: 600,
+              color: "#fff",
+              background: "#059669",
+              border: "none",
+              borderRadius: 8,
+              padding: "6px 12px",
+              cursor: "pointer"
+            }
+          },
+          "Usar esta a\xE7\xE3o"
+        )) : null
+      ) : null)),
+      /* @__PURE__ */ React4.createElement(
+        "div",
+        {
+          style: {
+            padding: "12px 20px",
+            borderTop: "1px solid rgba(255,255,255,0.08)",
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8
+          }
+        },
+        /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            onClick: onClose,
+            style: {
+              fontSize: 12,
+              fontWeight: 500,
+              color: "#d4d4d8",
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 10,
+              padding: "8px 16px",
+              cursor: "pointer"
+            }
+          },
+          "Cancelar"
+        ),
+        /* @__PURE__ */ React4.createElement(
+          "button",
+          {
+            onClick: save,
+            disabled: saving,
+            style: {
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#fff",
+              background: "#059669",
+              border: "none",
+              borderRadius: 10,
+              padding: "8px 20px",
+              cursor: "pointer",
+              opacity: saving ? 0.6 : 1
+            }
+          },
+          saving ? "Salvando\u2026" : "Salvar automa\xE7\xF5es"
+        )
+      )
+    )
+  );
+}
+var shSelectStyle = {
+  width: "100%",
+  background: "#27272a",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 10,
+  padding: "8px 12px",
+  fontSize: 13,
+  color: "#f4f4f5",
+  outline: "none"
+};
+var shInputStyle = {
+  width: "100%",
+  background: "#27272a",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 10,
+  padding: "8px 12px",
+  fontSize: 13,
+  color: "#f4f4f5",
+  outline: "none",
+  boxSizing: "border-box"
+};
+function ShSearchableInput({
+  paramKey,
+  target,
+  value,
+  onChange
+}) {
+  const [options, setOptions] = useState2([]);
+  const [open, setOpen] = useState2(false);
+  useEffect(() => {
+    let cancelled = false;
+    const listTool = paramKey === "contact" ? "get_wa_contacts" : paramKey === "device_name" ? "list_devices" : null;
+    if (!listTool) return;
+    extFetch(`/extensions/${target}/command`, { toolName: listTool, args: {} }).then((res) => {
+      if (cancelled) return;
+      const items = paramKey === "contact" ? res?.contacts : res?.devices;
+      const names = (items || []).map((c) => paramKey === "contact" ? c.name || c.notify || c.phone || "" : String(c.name || "")).filter(Boolean);
+      setOptions(Array.from(new Set(names)));
+    }).catch(() => {
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paramKey, target]);
+  const filtered = value.trim() ? options.filter((o) => o.toLowerCase().includes(value.toLowerCase())) : options;
+  return /* @__PURE__ */ React4.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React4.createElement(
+    "input",
+    {
+      type: "text",
+      value,
+      onChange: (e) => {
+        onChange(e.target.value);
+        setOpen(true);
+      },
+      onFocus: () => setOpen(true),
+      onBlur: () => setTimeout(() => setOpen(false), 150),
+      placeholder: options.length > 0 ? "Digite para buscar\u2026" : "Digite nome ou n\xFAmero",
+      style: shInputStyle
+    }
+  ), open && filtered.length > 0 ? /* @__PURE__ */ React4.createElement(
+    "div",
+    {
+      style: {
+        position: "absolute",
+        zIndex: 20,
+        top: "100%",
+        left: 0,
+        width: "100%",
+        maxHeight: 160,
+        overflowY: "auto",
+        background: "#27272a",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 10,
+        boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+      }
+    },
+    filtered.slice(0, 30).map((opt) => /* @__PURE__ */ React4.createElement(
+      "button",
+      {
+        key: opt,
+        type: "button",
+        onMouseDown: (e) => {
+          e.preventDefault();
+          onChange(opt);
+          setOpen(false);
+        },
+        style: {
+          display: "block",
+          width: "100%",
+          textAlign: "left",
+          padding: "6px 12px",
+          fontSize: 12,
+          color: "#e4e4e7",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer"
+        }
+      },
+      opt
+    ))
+  ) : null);
+}
 function SmartHomePage() {
   const [connections, setConnections] = useState2(() => {
     try {
@@ -1712,6 +2176,7 @@ function SmartHomePage() {
   });
   const [activeFilter, setActiveFilter] = useState2("controllable");
   const [showConnectModal, setShowConnectModal] = useState2(false);
+  const [showAutomations, setShowAutomations] = useState2(false);
   const [selectedDevice, setSelectedDevice] = useState2(null);
   const [haUrl, setHaUrl] = useState2("http://homeassistant.local:8123");
   const [haToken, setHaToken] = useState2("");
@@ -2082,6 +2547,21 @@ function SmartHomePage() {
     "button",
     {
       className: "sh-btn",
+      onClick: () => setShowAutomations(true),
+      title: "Automa\xE7\xF5es: a\xE7\xF5es autom\xE1ticas quando um dispositivo mudar de estado",
+      style: {
+        background: "rgba(56, 189, 248, 0.12)",
+        color: "#38bdf8",
+        border: "1px solid rgba(56, 189, 248, 0.25)",
+        cursor: "pointer"
+      }
+    },
+    /* @__PURE__ */ React4.createElement(SvgAutomation, { size: 15 }),
+    /* @__PURE__ */ React4.createElement("span", null, "Automa\xE7\xF5es")
+  ), /* @__PURE__ */ React4.createElement(
+    "button",
+    {
+      className: "sh-btn",
       onClick: handleResync,
       disabled: isSyncing,
       title: "Resincronizar dispositivos do Home Assistant",
@@ -2182,7 +2662,7 @@ function SmartHomePage() {
         adjustTemp(device, 1);
       } }, "+"), device.state.temperature != null && /* @__PURE__ */ React4.createElement("span", { style: { fontSize: "12px", color: "#94a3b8" } }, "atual: ", device.state.temperature, "\xB0")), device.domain === "sensor" && /* @__PURE__ */ React4.createElement("div", { style: { marginTop: "8px" } }, /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "15px", color: "#38bdf8", fontWeight: 700, margin: 0 } }, formatted.primary), formatted.secondary && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "11px", color: "#94a3b8", margin: "2px 0 0", display: "flex", alignItems: "center", gap: "4px" } }, /* @__PURE__ */ React4.createElement(SvgClock, { size: 11 }), " ", formatted.secondary)), device.domain === "cover" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#94a3b8", marginTop: "8px" } }, device.state.isOpen ? "Aberto" : "Fechado", device.state.position != null ? ` (${device.state.position}%)` : ""), device.domain === "lock" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.locked ? "#34d399" : "#f87171", fontWeight: 600, marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, device.state.locked ? /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgLock, { size: 13, color: "#34d399" }), " Trancado") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgUnlock, { size: 13, color: "#f87171" }), " Destrancado")), device.domain === "media_player" && device.state.mediaTitle && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#38bdf8", marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ React4.createElement(SvgPlay, { size: 11, color: "#38bdf8" }), " ", device.state.mediaTitle), device.domain === "binary_sensor" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.on ? "#f87171" : "#94a3b8", fontWeight: 600, marginTop: "8px" } }, device.state.on ? "Ativo" : "Inativo"))
     );
-  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice })))));
+  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice })))), /* @__PURE__ */ React4.createElement(AutomationsModal, { open: showAutomations, onClose: () => setShowAutomations(false) }));
 }
 export {
   SmartHomePage as default

@@ -1,4 +1,5 @@
 const path = require('path')
+const fs = require('fs')
 
 try {
   require('dotenv').config({ path: path.join(__dirname, '.env') })
@@ -11,6 +12,27 @@ const connector = require('./src/index')
 
 let deviceCache = { names: [], byRoom: {} }
 let ready = false
+
+// Actions config for the state_changed event (MOM-115). Kept in the extension's
+// own storage dir so the host can execute them generically when a device changes.
+function actionsConfigFile() {
+  return path.join(dataDir, 'extensions', 'momaismarthome', 'actions-state_changed.json')
+}
+
+function loadConfiguredActions() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(actionsConfigFile(), 'utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveConfiguredActions(actions) {
+  const file = actionsConfigFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(Array.isArray(actions) ? actions : [], null, 2))
+}
 
 async function init() {
   try {
@@ -46,9 +68,23 @@ if (typeof connector.on === 'function') {
           }
 
       try {
+        const state = data.device.state
+        const deviceState =
+          state && typeof state === 'object'
+            ? state.on != null
+              ? state.on
+                ? 'on'
+                : 'off'
+              : String(state.value ?? state.state ?? '')
+            : String(state ?? '')
+        const actions = loadConfiguredActions()
         dispatchEvent('state_changed', {
           device: data.device,
-          entityId: data.entityId || data.device.id
+          entityId: data.entityId || data.device.id,
+          deviceName: data.device.name || data.device.id,
+          deviceState,
+          deviceRoom: data.device.room || null,
+          actions: actions.length ? actions : undefined
         })
       } catch (err) {
         console.warn('[runtime] Erro ao transmitir evento state_changed:', err)
@@ -289,6 +325,28 @@ const tools = module.exports.tools = [
           description: 'Se true, fecha todos os controles abertos.'
         }
       }
+    }
+  },
+  {
+    name: 'set_actions',
+    description: 'Configura as actions que o host executa automaticamente quando um dispositivo muda de estado (evento state_changed). Cada action: { id, target, tool, args }. Os args podem usar {deviceName}, {deviceState}, {deviceRoom}, {entityId} ou {from: "event.<campo>"}.',
+    parameters: {
+      type: 'object',
+      required: ['actions'],
+      properties: {
+        actions: {
+          type: 'array',
+          description: 'Lista de actions a anexar ao evento state_changed'
+        }
+      }
+    }
+  },
+  {
+    name: 'get_actions',
+    description: 'Retorna as actions configuradas para o evento state_changed.',
+    parameters: {
+      type: 'object',
+      properties: {}
     }
   }
 ]
@@ -633,8 +691,7 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'close_device_control': {
-      const dispatchEvent = (momai && typeof momai.sendEvent === 'function')
-        ? (type, payload) => momai.sendEvent(type, payload)
+      const dispatchEvent = (momai && typeof momai.sendEvent === 'function')        ? (type, payload) => momai.sendEvent(type, payload)
         : (type, payload) => {
             if (typeof process.send === 'function') {
               process.send({ type: 'event', eventType: type, data: payload })
@@ -663,6 +720,20 @@ async function executeTool(toolName, args, momai) {
             ? `Controle do dispositivo "${deviceName}" fechado.`
             : 'Interface de controle flutuante fechada.'
       }
+    }
+
+    case 'set_actions': {
+      const actions = Array.isArray(args.actions) ? args.actions : []
+      saveConfiguredActions(actions)
+      return {
+        ok: true,
+        actions,
+        instruction: `${actions.length} action(s) configurada(s) para o evento state_changed.`
+      }
+    }
+
+    case 'get_actions': {
+      return { ok: true, actions: loadConfiguredActions() }
     }
 
     case 'connectToHomeAssistant': {

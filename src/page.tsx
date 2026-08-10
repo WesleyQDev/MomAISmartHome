@@ -445,6 +445,599 @@ const CACHE_CONNS_KEY = 'momaismarthome:connections'
 const CACHE_CONNECTED_KEY = 'momaismarthome:is_connected'
 const CACHE_HAS_SAVED_KEY = 'momaismarthome:has_saved_conn'
 
+const SH_TOOL_LABELS: Record<string, string> = {
+  send_message: 'Enviar mensagem',
+  control_device: 'Controlar dispositivo',
+  set_light_color: 'Cor da luz',
+  control_tv_remote: 'Controle da TV',
+  control_climate: 'Controlar clima',
+  call_ha_service: 'Serviço da casa',
+  list_devices: 'Listar dispositivos',
+  query_device: 'Consultar dispositivo',
+  capture_snapshot: 'Capturar print',
+  start_monitoring: 'Iniciar monitoramento',
+  list_contacts: 'Listar contatos',
+  get_history: 'Histórico'
+}
+
+const SH_PARAM_LABELS: Record<string, string> = {
+  contact: 'Contato ou número',
+  message: 'Mensagem',
+  image: 'Imagem',
+  device_name: 'Dispositivo',
+  action: 'Ação',
+  brightness: 'Brilho',
+  color: 'Cor',
+  temperature: 'Temperatura',
+  domain: 'Domínio',
+  service: 'Serviço',
+  data: 'Dados',
+  room: 'Cômodo',
+  cameraId: 'Câmera',
+  monitorId: 'Monitor',
+  label: 'Rótulo'
+}
+
+const SH_PLACEHOLDERS = [
+  { token: '{deviceName}', label: 'Dispositivo' },
+  { token: '{deviceState}', label: 'Estado' },
+  { token: '{deviceRoom}', label: 'Cômodo' },
+  { token: '{entityId}', label: 'Entidade' },
+  { token: '{event.imageDataUri}', label: 'Imagem' }
+]
+
+const SH_ENTITY_PARAMS = new Set(['contact', 'device_name', 'cameraId', 'monitorId'])
+
+interface ShAction {
+  id?: string
+  target: string
+  tool: string
+  args?: Record<string, unknown>
+}
+interface ShParam {
+  type?: string
+  description?: string
+  default?: unknown
+  enum?: string[]
+}
+interface ShTool {
+  name: string
+  description?: string
+  parameters?: { properties?: Record<string, ShParam> } | null
+}
+interface ShExt {
+  id: string
+  name?: string
+  installed?: boolean
+  enabled?: boolean
+  tools?: ShTool[]
+}
+
+function shHumanize(key: string): string {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function shFormatArgs(args?: Record<string, unknown>): string {
+  if (!args) return ''
+  return Object.entries(args)
+    .filter(([, v]) => !(typeof v === 'string' && !v.trim()))
+    .map(([k, v]) => {
+      const val = v && typeof v === 'object' ? JSON.stringify(v) : String(v)
+      return `${SH_PARAM_LABELS[k] || shHumanize(k)}: ${val}`
+    })
+    .join(' · ')
+}
+
+function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [catalog, setCatalog] = useState<ShExt[]>([])
+  const [actions, setActions] = useState<ShAction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [showDraft, setShowDraft] = useState(false)
+  const [target, setTarget] = useState('')
+  const [tool, setTool] = useState('')
+  const [draftArgs, setDraftArgs] = useState<Record<string, unknown>>({})
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    setShowDraft(false)
+    Promise.all([
+      extFetch('/extensions'),
+      sendCommand('get_actions')
+    ])
+      .then(([cat, act]) => {
+        const installed = (cat || []).filter(
+          (e: ShExt) =>
+            e.installed !== false &&
+            e.enabled !== false &&
+            Array.isArray(e.tools) &&
+            e.tools.length > 0
+        )
+        setCatalog(installed)
+        setActions(act?.actions || [])
+        if (installed.length > 0) setTarget((prev) => prev || installed[0].id)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [open])
+
+  const targetExt = catalog.find((e) => e.id === target)
+  const toolDef = targetExt?.tools?.find((t) => t.name === tool)
+  const props = toolDef?.parameters?.properties || {}
+
+  function selectTarget(next: string) {
+    setTarget(next)
+    const ext = catalog.find((e) => e.id === next)
+    const first =
+      ext?.tools?.find((t) => t.name !== 'get_actions' && t.name !== 'set_actions') || ext?.tools?.[0]
+    setTool(first?.name || '')
+    setDraftArgs(first ? defaultArgsFor(first) : {})
+  }
+
+  function selectTool(next: string) {
+    setTool(next)
+    setDraftArgs(defaultArgsFor(targetExt?.tools?.find((t) => t.name === next)))
+  }
+
+  function defaultArgsFor(def?: ShTool): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const [key, param] of Object.entries(def?.parameters?.properties || {})) {
+      out[key] = param && param.default !== undefined ? param.default : ''
+    }
+    return out
+  }
+
+  function addAction() {
+    if (!target || !tool) return
+    const clean: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(draftArgs)) {
+      if (typeof value === 'string' && !value.trim()) continue
+      clean[key] = value
+    }
+    setActions((prev) => [
+      ...prev,
+      { id: `act-${Date.now()}`, target, tool, args: Object.keys(clean).length ? clean : undefined }
+    ])
+    setShowDraft(false)
+  }
+
+  async function save() {
+    setSaving(true)
+    try {
+      await sendCommand('set_actions', { actions })
+      onClose()
+    } catch {
+      /* falha ao salvar */
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) return null
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(4px)'
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 480,
+          background: '#18181b',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 16,
+          boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+          display: 'flex',
+          flexDirection: 'column',
+          maxHeight: '90vh',
+          overflow: 'hidden'
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '16px 20px',
+            borderBottom: '1px solid rgba(255,255,255,0.08)',
+            background: '#09090b'
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff' }}>Automações</h2>
+          <button
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer', fontSize: 20 }}
+            aria-label="Fechar"
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto' }}>
+          <p style={{ margin: 0, fontSize: 12, color: '#a1a1aa' }}>
+            Ações executadas automaticamente quando um dispositivo mudar de estado (ex.: luz
+            ligou → Vision tira um print).
+          </p>
+
+          {loading ? (
+            <p style={{ margin: 0, fontSize: 12, color: '#71717a' }}>Carregando…</p>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d8' }}>Ações</span>
+                <button
+                  onClick={() => setShowDraft((v) => !v)}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 500,
+                    color: '#34d399',
+                    background: 'transparent',
+                    border: '1px solid rgba(52,211,153,0.3)',
+                    borderRadius: 8,
+                    padding: '4px 10px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {showDraft ? 'Cancelar' : '+ Adicionar ação'}
+                </button>
+              </div>
+
+              {actions.length === 0 && !showDraft ? (
+                <p style={{ margin: 0, fontSize: 11, color: '#71717a' }}>
+                  Nenhuma automação. Campos disponíveis:{' '}
+                  {SH_PLACEHOLDERS.map((p) => p.token).join(', ')}
+                </p>
+              ) : null}
+
+              {actions.map((a, i) => (
+                <div
+                  key={a.id || i}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12,
+                    padding: '8px 12px'
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: '#f4f4f5' }}>
+                      {catalog.find((e) => e.id === a.target)?.name || a.target}
+                      <span style={{ color: '#a1a1aa' }}> / </span>
+                      {SH_TOOL_LABELS[a.tool] || shHumanize(a.tool)}
+                    </div>
+                    {a.args && Object.keys(a.args).length > 0 ? (
+                      <div style={{ fontSize: 11, color: '#71717a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {shFormatArgs(a.args)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <button
+                    onClick={() => setActions(actions.filter((_, j) => j !== i))}
+                    style={{ background: 'transparent', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: 14 }}
+                    aria-label="Remover"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+
+              {showDraft ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12,
+                    padding: 12
+                  }}
+                >
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                      Extensão alvo
+                    </label>
+                    <select
+                      value={target}
+                      onChange={(e) => selectTarget(e.target.value)}
+                      style={shSelectStyle}
+                    >
+                      {catalog.length === 0 ? <option value="">Nenhuma extensão com ações instalada</option> : null}
+                      {catalog.map((ext) => (
+                        <option key={ext.id} value={ext.id}>
+                          {ext.name || ext.id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {toolDef ? (
+                    <>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>Ação</label>
+                        <select
+                          value={tool}
+                          onChange={(e) => selectTool(e.target.value)}
+                          style={shSelectStyle}
+                        >
+                          {targetExt?.tools
+                            ?.filter((t) => t.name !== 'get_actions' && t.name !== 'set_actions')
+                            .map((t) => (
+                              <option key={t.name} value={t.name}>
+                                {SH_TOOL_LABELS[t.name] || shHumanize(t.name)}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {Object.entries(props).map(([key, param]) => (
+                          <div key={key}>
+                            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                              {SH_PARAM_LABELS[key] || shHumanize(key)}
+                              {param?.default !== undefined ? ' (pré-preenchido)' : ''}
+                            </label>
+                            {param?.enum ? (
+                              <select
+                                value={String(draftArgs[key] ?? '')}
+                                onChange={(e) => setDraftArgs((d) => ({ ...d, [key]: e.target.value }))}
+                                style={shSelectStyle}
+                              >
+                                {param.enum.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : SH_ENTITY_PARAMS.has(key) ? (
+                              <ShSearchableInput
+                                target={target}
+                                paramKey={key}
+                                value={String(draftArgs[key] ?? '')}
+                                onChange={(v) => setDraftArgs((d) => ({ ...d, [key]: v }))}
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                value={String(draftArgs[key] ?? '')}
+                                onChange={(e) => setDraftArgs((d) => ({ ...d, [key]: e.target.value }))}
+                                placeholder={param?.description || ''}
+                                style={shInputStyle}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {SH_PLACEHOLDERS.map((p) => (
+                          <button
+                            key={p.token}
+                            onClick={() =>
+                              setDraftArgs((d) => {
+                                const firstEmpty = Object.keys(props).find((k) => !String(d[k] ?? '').trim())
+                                if (!firstEmpty) return d
+                                return { ...d, [firstEmpty]: p.token }
+                              })
+                            }
+                            style={{
+                              fontSize: 10,
+                              color: '#a1a1aa',
+                              background: 'transparent',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                              borderRadius: 8,
+                              padding: '2px 8px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {p.label} {p.token}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={addAction}
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: '#fff',
+                          background: '#059669',
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '6px 12px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Usar esta ação
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        <div
+          style={{
+            padding: '12px 20px',
+            borderTop: '1px solid rgba(255,255,255,0.08)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              fontSize: 12,
+              fontWeight: 500,
+              color: '#d4d4d8',
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 10,
+              padding: '8px 16px',
+              cursor: 'pointer'
+            }}
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#fff',
+              background: '#059669',
+              border: 'none',
+              borderRadius: 10,
+              padding: '8px 20px',
+              cursor: 'pointer',
+              opacity: saving ? 0.6 : 1
+            }}
+          >
+            {saving ? 'Salvando…' : 'Salvar automações'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const shSelectStyle: React.CSSProperties = {
+  width: '100%',
+  background: '#27272a',
+  border: '1px solid rgba(255,255,255,0.1)',
+  borderRadius: 10,
+  padding: '8px 12px',
+  fontSize: 13,
+  color: '#f4f4f5',
+  outline: 'none'
+}
+
+const shInputStyle: React.CSSProperties = {
+  width: '100%',
+  background: '#27272a',
+  border: '1px solid rgba(255,255,255,0.1)',
+  borderRadius: 10,
+  padding: '8px 12px',
+  fontSize: 13,
+  color: '#f4f4f5',
+  outline: 'none',
+  boxSizing: 'border-box'
+}
+
+function ShSearchableInput({
+  paramKey,
+  target,
+  value,
+  onChange
+}: {
+  paramKey: string
+  target: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [options, setOptions] = useState<string[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const listTool = paramKey === 'contact' ? 'get_wa_contacts' : paramKey === 'device_name' ? 'list_devices' : null
+    if (!listTool) return
+    extFetch(`/extensions/${target}/command`, { toolName: listTool, args: {} })
+      .then((res) => {
+        if (cancelled) return
+        const items = paramKey === 'contact' ? res?.contacts : res?.devices
+        const names = (items || [])
+          .map((c: any) => (paramKey === 'contact' ? c.name || c.notify || c.phone || '' : String(c.name || '')))
+          .filter(Boolean) as string[]
+        setOptions(Array.from(new Set(names)))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [paramKey, target])
+
+  const filtered = value.trim() ? options.filter((o) => o.toLowerCase().includes(value.toLowerCase())) : options
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={options.length > 0 ? 'Digite para buscar…' : 'Digite nome ou número'}
+        style={shInputStyle}
+      />
+      {open && filtered.length > 0 ? (
+        <div
+          style={{
+            position: 'absolute',
+            zIndex: 20,
+            top: '100%',
+            left: 0,
+            width: '100%',
+            maxHeight: 160,
+            overflowY: 'auto',
+            background: '#27272a',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 10,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+          }}
+        >
+          {filtered.slice(0, 30).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                onChange(opt)
+                setOpen(false)
+              }}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '6px 12px',
+                fontSize: 12,
+                color: '#e4e4e7',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function SmartHomePage() {
   const [connections, setConnections] = useState<Connection[]>(() => {
     try {
@@ -489,6 +1082,7 @@ export default function SmartHomePage() {
   const [activeFilter, setActiveFilter] = useState<string>('controllable')
 
   const [showConnectModal, setShowConnectModal] = useState(false)
+  const [showAutomations, setShowAutomations] = useState(false)
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
   const [haUrl, setHaUrl] = useState('http://homeassistant.local:8123')
   const [haToken, setHaToken] = useState('')
@@ -1004,6 +1598,21 @@ export default function SmartHomePage() {
             <div className="sh-actions">
               <button
                 className="sh-btn"
+                onClick={() => setShowAutomations(true)}
+                title="Automações: ações automáticas quando um dispositivo mudar de estado"
+                style={{
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  color: '#38bdf8',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  cursor: 'pointer'
+                }}
+              >
+                <SvgAutomation size={15} />
+                <span>Automações</span>
+              </button>
+
+              <button
+                className="sh-btn"
                 onClick={handleResync}
                 disabled={isSyncing}
                 title="Resincronizar dispositivos do Home Assistant"
@@ -1239,6 +1848,7 @@ export default function SmartHomePage() {
           )}
         </>
       )}
+      <AutomationsModal open={showAutomations} onClose={() => setShowAutomations(false)} />
     </div>
   )
 }

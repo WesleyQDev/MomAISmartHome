@@ -19,7 +19,126 @@
     "panel": "dist/panel.js",
     "panelType": "momaismarthome-panel"
   },
-  "eventTypes": ["open_overlay", "state_changed", "connection_changed"],
+  "eventTypes": {
+    "state_changed": {
+      "fields": {
+        "deviceName": { "label": "Dispositivo", "type": "string" },
+        "deviceState": { "label": "Estado", "type": "string" },
+        "deviceRoom": { "label": "Cômodo", "type": "string" },
+        "entityId": { "label": "Entidade", "type": "string" }
+      }
+    },
+    "open_overlay": {},
+    "connection_changed": {}
+  },
+  "tools": [
+    {
+      "name": "control_device",
+      "description": "Liga, desliga ou ajusta um dispositivo inteligente (luzes, interruptores, TV, ar condicionado, etc).",
+      "parameters": {
+        "type": "object",
+        "required": ["device_name", "action"],
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome exato ou parcial do dispositivo" },
+          "action": { "type": "string", "enum": ["on", "off", "toggle"], "description": "Ação principal" },
+          "brightness": { "type": "number", "description": "Brilho (0-100) para luzes" },
+          "color": { "type": "string", "description": "Cor da luz (nome ou HEX)" },
+          "color_temp": { "type": "number", "description": "Temperatura da cor em Kelvin" }
+        }
+      }
+    },
+    {
+      "name": "set_light_color",
+      "description": "Muda a cor, brilho ou temperatura de cor de uma lâmpada ou fita LED.",
+      "parameters": {
+        "type": "object",
+        "required": ["device_name"],
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome da lâmpada ou grupo de luzes" },
+          "color": { "type": "string", "description": "Nome da cor ou HEX" },
+          "brightness": { "type": "number", "description": "Brilho de 0 a 100%" },
+          "color_temp": { "type": "number", "description": "Temperatura da cor em Kelvin" }
+        }
+      }
+    },
+    {
+      "name": "control_tv_remote",
+      "description": "Controle de TV e reprodutores de mídia: comandos de controle remoto, alternância de entrada/fonte e reprodução.",
+      "parameters": {
+        "type": "object",
+        "required": ["device_name"],
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome da TV ou Media Player" },
+          "command": { "type": "string", "description": "Botão do controle remoto (power, volume_up, mute, etc)" },
+          "action": { "type": "string", "enum": ["play", "pause", "stop", "next", "previous", "volume_up", "volume_down", "mute", "unmute", "source", "volume"], "description": "Ação de mídia" },
+          "value": { "type": "string", "description": "Valor para ação (ex: volume ou nome da fonte)" }
+        }
+      }
+    },
+    {
+      "name": "control_climate",
+      "description": "Ajusta temperatura alvo e modo de operação do ar condicionado ou termostato.",
+      "parameters": {
+        "type": "object",
+        "required": ["device_name"],
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome do ar condicionado ou termostato" },
+          "temperature": { "type": "number", "description": "Temperatura desejada em Celsius" },
+          "hvac_mode": { "type": "string", "enum": ["cool", "heat", "fan_only", "auto", "off"], "description": "Modo do ar condicionado" }
+        }
+      }
+    },
+    {
+      "name": "call_ha_service",
+      "description": "Executa um serviço arbitrário do Home Assistant (domínio, serviço e dados JSON).",
+      "parameters": {
+        "type": "object",
+        "required": ["domain", "service"],
+        "properties": {
+          "domain": { "type": "string", "description": "Domínio do serviço (ex: light, scene, media_player)" },
+          "service": { "type": "string", "description": "Nome do serviço (ex: turn_on, select_source)" },
+          "data": { "type": "object", "description": "Dados adicionais em JSON para o serviço" }
+        }
+      }
+    },
+    {
+      "name": "list_devices",
+      "description": "Lista todos os dispositivos inteligentes disponíveis com seus estados.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "room": { "type": "string", "description": "Filtrar por cômodo (opcional)" }
+        }
+      }
+    },
+    {
+      "name": "query_device",
+      "description": "Obtém o estado detalhado de um dispositivo específico.",
+      "parameters": {
+        "type": "object",
+        "required": ["device_name"],
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome do dispositivo" }
+        }
+      }
+    },
+    {
+      "name": "set_actions",
+      "description": "Configura as actions que o host executa automaticamente quando um dispositivo muda de estado.",
+      "parameters": {
+        "type": "object",
+        "required": ["actions"],
+        "properties": {
+          "actions": { "type": "array", "description": "Lista de actions { id, target, tool, args }" }
+        }
+      }
+    },
+    {
+      "name": "get_actions",
+      "description": "Retorna as actions configuradas para o evento state_changed.",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ],
   "theme": {
     "gradient": "from-violet-600 to-purple-500",
     "accent": "violet"
