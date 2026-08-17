@@ -649,10 +649,15 @@ export function DeviceControlCardContent({
       const sourceName = cmdUpper === 'YOUTUBE' ? 'YouTube' : 'Netflix'
       const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
 
+      // Find the best target: prefer media_player, fall back to current device
+      const mediaTarget = effectiveAllDevices.find(d => d.domain === 'media_player') || volumeDevice
+      const mediaId = mediaTarget?.id || targetId
+      const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote') || (targetId !== mediaId ? { id: targetId } : null)
+
       // 2a. Tentar media_player.play_media com o appId do Android TV
       try {
         const res = await executeService('media_player', 'play_media', {
-          entity_id: targetId,
+          entity_id: mediaId,
           media_content_type: 'app',
           media_content_id: appId
         })
@@ -660,7 +665,6 @@ export function DeviceControlCardContent({
       } catch (e) {}
 
       // 2b. Tentar remote.turn_on com activity no remote (ex: remote.tv_thucos)
-      const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote')
       if (candidateRemote) {
         try {
           const res = await executeService('remote', 'turn_on', {
@@ -673,7 +677,7 @@ export function DeviceControlCardContent({
 
       // 2c. Tentar media_player.select_source
       try {
-        const res = await executeService('media_player', 'select_source', { entity_id: targetId, source: sourceName })
+        const res = await executeService('media_player', 'select_source', { entity_id: mediaId, source: sourceName })
         if (res?.success !== false && res?.ok !== false) return
       } catch (e) {}
     }
