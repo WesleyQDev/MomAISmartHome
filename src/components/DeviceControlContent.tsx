@@ -842,7 +842,7 @@ export function DeviceControlCardContent({
   }
 
   const handleVolumeChange = async (direction: 'down' | 'up') => {
-    const nextVolumePercent = Math.max(0, Math.min(100, volumePercentRef.current + (direction === 'up' ? 10 : -10)))
+    const nextVolumePercent = Math.max(0, Math.min(100, volumePercentRef.current + (direction === 'up' ? 1 : -1)))
     volumePercentRef.current = nextVolumePercent
     setVolumePercent(nextVolumePercent)
     setActiveVolumeButton(direction)
@@ -852,24 +852,24 @@ export function DeviceControlCardContent({
     }
     volumeFeedbackTimerRef.current = setTimeout(() => setActiveVolumeButton(null), 1200)
 
-    const service = direction === 'up' ? 'volume_up' : 'volume_down'
+    const volumeLevel = nextVolumePercent / 100
     console.log(`[SmartHome] handleVolumeChange ${direction} -> ${nextVolumePercent}% device=${volumeDevice.id}`)
     
-    // Try volume_up/volume_down first (works on most media players).
-    // Fall back to volume_set if the relative services are not supported.
-    let result = await executeService('media_player', service, { entity_id: volumeDevice.id })
-    console.log('[SmartHome] handleVolumeChange result:', JSON.stringify(result))
+    // Try volume_set first for precise 1% control
+    let result = await executeService('media_player', 'volume_set', { entity_id: volumeDevice.id, volume_level: volumeLevel })
+    console.log('[SmartHome] handleVolumeChange volume_set result:', JSON.stringify(result))
     
+    // If volume_set failed, fall back to volume_up/volume_down (coarser but works)
     if (result && result.ok === false) {
-      const volumeLevel = nextVolumePercent / 100
-      console.log('[SmartHome] handleVolumeChange: relative service failed, trying volume_set')
-      result = await executeService('media_player', 'volume_set', { entity_id: volumeDevice.id, volume_level: volumeLevel })
-      console.log('[SmartHome] handleVolumeChange volume_set result:', JSON.stringify(result))
+      const service = direction === 'up' ? 'volume_up' : 'volume_down'
+      console.log('[SmartHome] handleVolumeChange: volume_set failed, trying', service)
+      result = await executeService('media_player', service, { entity_id: volumeDevice.id })
+      console.log('[SmartHome] handleVolumeChange fallback result:', JSON.stringify(result))
     }
     
-    // If the command failed, revert to the previous volume
+    // If all commands failed, revert the optimistic UI update
     if (result && result.ok === false) {
-      const revertedVolume = volumePercentRef.current - (direction === 'up' ? 10 : -10)
+      const revertedVolume = volumePercentRef.current - (direction === 'up' ? 1 : -1)
       volumePercentRef.current = Math.max(0, Math.min(100, revertedVolume))
       setVolumePercent(volumePercentRef.current)
     }
