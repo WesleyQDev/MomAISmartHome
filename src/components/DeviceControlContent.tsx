@@ -649,9 +649,13 @@ export function DeviceControlCardContent({
       const sourceName = cmdUpper === 'YOUTUBE' ? 'YouTube' : 'Netflix'
       const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
 
-      // Find the best target: prefer the volumeDevice (the one that actually
-      // reports volume and responds to commands), then any media_player, then targetId
-      const mediaId = volumeDevice?.id || effectiveAllDevices.find(d => d.domain === 'media_player')?.id || targetId
+      // Find the best media_player target: prefer one that's actually online,
+      // skip 'unavailable' entities (like tv_thucos which has stale integrations)
+      const mediaPlayers = effectiveAllDevices.filter(d => d.domain === 'media_player')
+      const mediaId = mediaPlayers.find(d => d.state?.rawState !== 'unavailable' && d.state?.volume != null)?.id
+        || mediaPlayers.find(d => d.state?.rawState !== 'unavailable')?.id
+        || volumeDevice?.id
+        || targetId
       const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote') || (targetId !== mediaId ? { id: targetId } : null)
 
       console.log(`[SmartHome] YouTube/Netflix: mediaId=${mediaId} candidateRemote=${candidateRemote?.id} targetId=${targetId} allDomains=${effectiveAllDevices.map(d => d.id).join(',')}`)
