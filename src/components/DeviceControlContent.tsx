@@ -649,37 +649,51 @@ export function DeviceControlCardContent({
       const sourceName = cmdUpper === 'YOUTUBE' ? 'YouTube' : 'Netflix'
       const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
 
-      // Find the best target: prefer media_player, fall back to current device
-      const mediaTarget = effectiveAllDevices.find(d => d.domain === 'media_player') || volumeDevice
-      const mediaId = mediaTarget?.id || targetId
+      // Find the best target: prefer the volumeDevice (the one that actually
+      // reports volume and responds to commands), then any media_player, then targetId
+      const mediaId = volumeDevice?.id || effectiveAllDevices.find(d => d.domain === 'media_player')?.id || targetId
       const candidateRemote = effectiveAllDevices.find(d => d.domain === 'remote') || (targetId !== mediaId ? { id: targetId } : null)
+
+      console.log(`[SmartHome] YouTube/Netflix: mediaId=${mediaId} candidateRemote=${candidateRemote?.id} targetId=${targetId} allDomains=${effectiveAllDevices.map(d => d.id).join(',')}`)
 
       // 2a. Tentar media_player.play_media com o appId do Android TV
       try {
+        console.log(`[SmartHome] YouTube/Netflix: trying media_player.play_media on ${mediaId}`)
         const res = await executeService('media_player', 'play_media', {
           entity_id: mediaId,
           media_content_type: 'app',
           media_content_id: appId
         })
+        console.log('[SmartHome] YouTube/Netflix: media_player.play_media result:', JSON.stringify(res))
         if (res?.success !== false && res?.ok !== false) return
-      } catch (e) {}
+      } catch (e) {
+        console.log('[SmartHome] YouTube/Netflix: media_player.play_media threw:', e)
+      }
 
       // 2b. Tentar remote.turn_on com activity no remote (ex: remote.tv_thucos)
       if (candidateRemote) {
         try {
+          console.log(`[SmartHome] YouTube/Netflix: trying remote.turn_on on ${candidateRemote.id}`)
           const res = await executeService('remote', 'turn_on', {
             entity_id: candidateRemote.id,
             activity: appId
           })
+          console.log('[SmartHome] YouTube/Netflix: remote.turn_on result:', JSON.stringify(res))
           if (res?.success !== false && res?.ok !== false) return
-        } catch (e) {}
+        } catch (e) {
+          console.log('[SmartHome] YouTube/Netflix: remote.turn_on threw:', e)
+        }
       }
 
       // 2c. Tentar media_player.select_source
       try {
+        console.log(`[SmartHome] YouTube/Netflix: trying media_player.select_source on ${mediaId}`)
         const res = await executeService('media_player', 'select_source', { entity_id: mediaId, source: sourceName })
+        console.log('[SmartHome] YouTube/Netflix: media_player.select_source result:', JSON.stringify(res))
         if (res?.success !== false && res?.ok !== false) return
-      } catch (e) {}
+      } catch (e) {
+        console.log('[SmartHome] YouTube/Netflix: media_player.select_source threw:', e)
+      }
     }
 
     // 3. Suporte às Entradas TV, HDMI 1, HDMI 2, HDMI 3 e AV
