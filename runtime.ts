@@ -8,7 +8,27 @@ try {
 const dataDir = process.env.MOMAI_NODE_CORE_DATA_DIR || process.env.MOMAI_DATA_DIR || path.join(__dirname, 'data')
 process.env.DB_PATH = process.env.DB_PATH || path.join(dataDir, 'smarthome.sqlite')
 
-const connector = require('./src/index')
+const connector = require('./src/index.ts')
+
+// Envia mensagens ao host com proteção contra crash: se o canal IPC estiver
+// fechado/morto, loga em vez de derrubar o worker (que deixaria o node-core
+// esperando resposta para sempre → loading infinito na UI).
+function safeSend(msg) {
+  try {
+    if (typeof process.send === 'function') process.send(msg)
+  } catch (err) {
+    console.warn('[runtime] Erro ao enviar mensagem ao host:', err && err.message ? err.message : err)
+  }
+}
+
+// Nunca deixa o worker morrer por um erro não tratado: loga e continua. Se o
+// worker morre sem responder, o node-core pendura o fetch da UI indefinidamente.
+process.on('uncaughtException', (err) => {
+  console.error('[runtime] Erro não tratado no worker (continuando):', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[runtime] Rejeição não tratada no worker (continuando):', reason)
+})
 
 let deviceCache = { names: [], byRoom: {} }
 let ready = false
@@ -22,7 +42,8 @@ function actionsConfigFile() {
 function loadConfiguredActions() {
   try {
     const parsed = JSON.parse(fs.readFileSync(actionsConfigFile(), 'utf8'))
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((act) => act && typeof act.target === 'string' && act.target.trim().length > 0)
   } catch {
     return []
   }
@@ -39,34 +60,46 @@ async function init() {
     const momaiObj = (typeof momai !== 'undefined' && momai) ? momai : { storage: { storageDir: dataDir } }
     await connector.init(momaiObj)
     ready = true
-    if (typeof process.send === 'function') process.send({ type: 'ready' })
+    safeSend({ type: 'ready' })
 
     // Perform connection & device cache refresh asynchronously in background
     connector.ensureConnected(momaiObj)
       .then(() => refreshDeviceCache())
       .catch((err) => {
-        if (typeof process.send === 'function') process.send({ type: 'log', message: `Background connect error: ${err.message}` })
+        safeSend({ type: 'log', message: `Background connect error: ${err.message}` })
       })
   } catch (err) {
     ready = true
-    if (typeof process.send === 'function') process.send({ type: 'ready' })
+    safeSend({ type: 'ready' })
   }
 }
 
 // Automatically initialize connection on worker startup
 init().catch((err) => console.warn('[runtime] Auto-init error:', err))
 
+const lastStateMap = new Map()
+const LAST_STATE_MAX = 5000
+
+// Registra o estado de uma entidade com dedup de 3s e eviction LRU simples
+// (Map preserva ordem de inserção). Evita crescimento infinito em memória
+// quando há muitas entidades/estados únicos (B4).
+function recordLastState(entityId, deviceState) {
+  const now = Date.now()
+  const last = lastStateMap.get(entityId)
+  if (last && last.state === deviceState && now - last.timestamp < 3000) {
+    return false
+  }
+  lastStateMap.set(entityId, { state: deviceState, timestamp: now })
+  if (lastStateMap.size > LAST_STATE_MAX) {
+    const oldest = lastStateMap.keys().next().value
+    if (oldest !== undefined) lastStateMap.delete(oldest)
+  }
+  return true
+}
+
 if (typeof connector.on === 'function') {
   connector.on('state_changed', (data) => {
     if (data && data.device) {
-      const dispatchEvent = (typeof momai !== 'undefined' && momai && typeof momai.sendEvent === 'function')
-        ? (type, payload) => momai.sendEvent(type, payload)
-        : (type, payload) => {
-            if (typeof process.send === 'function') {
-              process.send({ type: 'event', eventType: type, data: payload })
-            }
-          }
-
       try {
         const state = data.device.state
         const deviceState =
@@ -77,14 +110,35 @@ if (typeof connector.on === 'function') {
                 : 'off'
               : String(state.value ?? state.state ?? '')
             : String(state ?? '')
-        const actions = loadConfiguredActions()
-        dispatchEvent('state_changed', {
+
+        // Include volume in dedup key so volume changes are not dropped.
+        // Without this, media_player volume_set events are discarded because
+        // the deviceState string stays 'on' even when volume_level changes.
+        const volumeKey = state && typeof state === 'object' && state.volume != null
+          ? `${deviceState}:v${Math.round(state.volume * 100)}`
+          : deviceState
+
+        const entityId = data.entityId || data.device.id
+        if (!recordLastState(entityId, volumeKey)) {
+          // Descarte eventos duplicados para o mesmo estado no intervalo de 3 segundos
+          return
+        }
+
+        const dispatchEvent = (typeof momai !== 'undefined' && momai && typeof momai.sendEvent === 'function')
+          ? (type, payload) => momai.sendEvent(type, payload)
+          : (type, payload) => {
+              safeSend({ type: 'event', eventType: type, data: payload })
+            }
+
+        const eventData = {
           device: data.device,
-          entityId: data.entityId || data.device.id,
+          entityId,
           deviceName: data.device.name || data.device.id,
           deviceState,
-          deviceRoom: data.device.room || null,
-          actions: actions.length ? actions : undefined
+          deviceRoom: data.device.room || null
+        }
+        dispatchEvent('state_changed', {
+          ...eventData
         })
       } catch (err) {
         console.warn('[runtime] Erro ao transmitir evento state_changed:', err)
@@ -96,9 +150,7 @@ if (typeof connector.on === 'function') {
     const dispatchEvent = (typeof momai !== 'undefined' && momai && typeof momai.sendEvent === 'function')
       ? (type, payload) => momai.sendEvent(type, payload)
       : (type, payload) => {
-          if (typeof process.send === 'function') {
-            process.send({ type: 'event', eventType: type, data: payload })
-          }
+          safeSend({ type: 'event', eventType: type, data: payload })
         }
 
     try {
@@ -130,12 +182,12 @@ async function refreshDeviceCache() {
   }
 }
 
-// Background sync interval (every 15s) to discover new devices automatically
+// Background sync interval (every 30s) to discover new devices automatically
 const syncInterval = setInterval(async () => {
-  if (ready) {
+  if (ready && connector.isConnected) {
     await refreshDeviceCache().catch(() => {})
   }
-}, 15000)
+}, 30000)
 if (typeof syncInterval.unref === 'function') syncInterval.unref()
 
 const tools = module.exports.tools = [
@@ -326,35 +378,11 @@ const tools = module.exports.tools = [
         }
       }
     }
-  },
-  {
-    name: 'set_actions',
-    description: 'Configura as actions que o host executa automaticamente quando um dispositivo muda de estado (evento state_changed). Cada action: { id, target, tool, args }. Os args podem usar {deviceName}, {deviceState}, {deviceRoom}, {entityId} ou {from: "event.<campo>"}.',
-    parameters: {
-      type: 'object',
-      required: ['actions'],
-      properties: {
-        actions: {
-          type: 'array',
-          description: 'Lista de actions a anexar ao evento state_changed'
-        }
-      }
-    }
-  },
-  {
-    name: 'get_actions',
-    description: 'Retorna as actions configuradas para o evento state_changed.',
-    parameters: {
-      type: 'object',
-      properties: {}
-    }
   }
 ]
 
 const hbInterval = setInterval(() => {
-  if (typeof process.send === 'function') {
-    process.send({ type: 'heartbeat', timestamp: Date.now() })
-  }
+  safeSend({ type: 'heartbeat', timestamp: Date.now() })
 }, 30000)
 if (typeof hbInterval.unref === 'function') hbInterval.unref()
 
@@ -364,9 +392,9 @@ process.on('message', async (msg) => {
       const { requestId, payload } = msg
       const { toolName, args = {}, momai } = payload || {}
       const result = await executeTool(toolName, args, momai)
-      process.send({ type: 'response', requestId, result })
+      safeSend({ type: 'response', requestId, result })
     } catch (err) {
-      process.send({
+      safeSend({
         type: 'response',
         requestId: msg.requestId,
         result: { ok: false, error: err.message }
@@ -389,12 +417,42 @@ function normalizeString(str) {
     .trim()
 }
 
-async function matchDevice(query, momai) {
-  if (!query || typeof query !== 'string') return null
-  await connector.ensureConnected(momai).catch(() => {})
-  const devices = await connector.getDevices()
-  if (!devices || devices.length === 0) return null
+// Mapeia o estado de um device normalizado (state.on + state.rawState) para
+// um rótulo pt-BR. Sensores/clima/sol/tempo NÃO são liga/desliga: usam o
+// estado textual real em vez de "off" quando state.on é false (M5).
+const CLIMATE_MODE_LABELS = {
+  cool: 'frio',
+  heat: 'quente',
+  fan_only: 'ventilação',
+  auto: 'automático',
+  dry: 'seco',
+  heat_cool: 'automático (aquecer/resfriar)',
+  off: 'desligado'
+}
 
+function deviceStateLabel(device) {
+  const domain = device?.domain
+  const raw = String(device?.state?.rawState ?? '').toLowerCase().trim()
+  const on = Boolean(device?.state?.on)
+
+  if (domain === 'climate') {
+    return CLIMATE_MODE_LABELS[raw] || raw || (on ? 'ligado' : 'desligado')
+  }
+
+  if (domain === 'sensor' || domain === 'binary_sensor' || domain === 'sun' || domain === 'weather') {
+    if (raw === 'on' || raw === 'home' || raw === 'active' || raw === 'above_horizon') return 'ativo'
+    if (raw === 'off' || raw === 'away' || raw === 'closed' || raw === 'below_horizon') return 'inativo'
+    if (raw) return raw
+    return on ? 'ativo' : 'inativo'
+  }
+
+  // light / switch / fan / media_player / remote / etc.
+  return on ? 'on' : 'off'
+}
+
+// Pure matching logic — works on an already-fetched device list.
+function matchDeviceFromList(query, devices) {
+  if (!query || typeof query !== 'string' || !Array.isArray(devices) || devices.length === 0) return null
   const normQuery = normalizeString(query)
   if (!normQuery) return null
 
@@ -459,6 +517,14 @@ async function matchDevice(query, momai) {
   return maxScore > 0 ? bestDevice : null
 }
 
+// Fetches devices (with connection attempt) then delegates to matchDeviceFromList.
+async function matchDevice(query, momai) {
+  if (!query || typeof query !== 'string') return null
+  await connector.ensureConnected(momai).catch(() => {})
+  const devices = await connector.getDevices().catch(() => [])
+  return matchDeviceFromList(query, devices)
+}
+
 async function executeTool(toolName, args, momai) {
   if (typeof toolName === 'object' && toolName !== null) {
     const opts = toolName
@@ -468,7 +534,9 @@ async function executeTool(toolName, args, momai) {
   }
   args = args || {}
 
-  if (toolName !== 'connectToHomeAssistant') {
+  // get_actions/set_actions não dependem do HA — não fazem ensureConnected,
+  // senão o modal de Automações fica pendurado quando o HA está offline.
+  if (toolName !== 'connectToHomeAssistant' && toolName !== 'get_actions' && toolName !== 'set_actions') {
     await connector.ensureConnected(momai).catch(() => {})
   }
 
@@ -599,7 +667,7 @@ async function executeTool(toolName, args, momai) {
         id: d.id,
         type: d.domain,
         room: d.room || null,
-        state: d.state.on ? 'on' : 'off',
+        state: deviceStateLabel(d),
         value: d.domain === 'sensor' ? d.state.value : null,
         temperature: d.state.temperature || d.state.targetTemperature || null,
         brightness: d.state.brightness || null
@@ -624,32 +692,33 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'open_device_control': {
-      let device = await matchDevice(args.device_name, momai)
-      if (!device) {
-        const all = await connector.getDevices().catch(() => [])
-        device = all.find((d) => d.domain === 'media_player' || d.domain === 'remote' || d.domain === 'tv')
+      // Single getDevices call — avoids cascading HTTP timeouts when HA is offline
+      await connector.ensureConnected(momai).catch(() => {})
+      const allDevices = await connector.getDevices().catch(() => [])
+
+      let device = matchDeviceFromList(args.device_name, allDevices)
+      if (!device && allDevices.length > 0) {
+        device = allDevices.find((d) => d.domain === 'media_player' || d.domain === 'remote' || d.domain === 'tv')
       }
       if (!device) {
-        const devName = String(args.device_name || 'TV').trim()
+        const devName = String(args.device_name || 'Controle').trim()
         device = { id: 'tv_remote', name: devName || 'Controle TV', domain: 'media_player', provider: 'homeassistant', state: 'off' }
       }
 
-      const allDevices = await connector.getDevices().catch(() => [device])
-
-      let overlayWidth = 380
-      let overlayHeight = 520
+      let overlayWidth = 320
+      let overlayHeight = 540
 
       if (device.domain === 'media_player' || device.domain === 'remote') {
-        overlayWidth = 300
-        overlayHeight = 500
+        overlayWidth = 320
+        overlayHeight = 520
       } else if (device.domain === 'light') {
-        overlayWidth = 280
-        overlayHeight = 440
+        overlayWidth = 320
+        overlayHeight = 540
       } else if (device.domain === 'climate') {
-        overlayWidth = 300
-        overlayHeight = 440
+        overlayWidth = 320
+        overlayHeight = 460
       } else {
-        overlayWidth = 280
+        overlayWidth = 300
         overlayHeight = 440
       }
 
@@ -672,9 +741,7 @@ async function executeTool(toolName, args, momai) {
       const dispatchEvent = (momai && typeof momai.sendEvent === 'function')
         ? (type, payload) => momai.sendEvent(type, payload)
         : (type, payload) => {
-            if (typeof process.send === 'function') {
-              process.send({ type: 'event', eventType: type, data: payload })
-            }
+            safeSend({ type: 'event', eventType: type, data: payload })
           }
 
       try {
@@ -693,9 +760,7 @@ async function executeTool(toolName, args, momai) {
     case 'close_device_control': {
       const dispatchEvent = (momai && typeof momai.sendEvent === 'function')        ? (type, payload) => momai.sendEvent(type, payload)
         : (type, payload) => {
-            if (typeof process.send === 'function') {
-              process.send({ type: 'event', eventType: type, data: payload })
-            }
+            safeSend({ type: 'event', eventType: type, data: payload })
           }
       const deviceName = typeof args?.device_name === 'string' && args.device_name.trim()
         ? args.device_name.trim()
@@ -722,18 +787,29 @@ async function executeTool(toolName, args, momai) {
       }
     }
 
-    case 'set_actions': {
-      const actions = Array.isArray(args.actions) ? args.actions : []
-      saveConfiguredActions(actions)
-      return {
-        ok: true,
-        actions,
-        instruction: `${actions.length} action(s) configurada(s) para o evento state_changed.`
-      }
+    case 'get_actions': {
+      const actions = loadConfiguredActions()
+      return { ok: true, actions }
     }
 
-    case 'get_actions': {
-      return { ok: true, actions: loadConfiguredActions() }
+    case 'set_actions': {
+      const incoming = Array.isArray(args?.actions) ? args.actions : []
+      // Valida o shape que a UI monta em page.tsx: { id?, target, tool, args?, when? }
+      const valid = incoming.filter(
+        (a) =>
+          a &&
+          typeof a === 'object' &&
+          typeof a.target === 'string' &&
+          a.target.trim().length > 0
+      )
+      saveConfiguredActions(valid)
+      return {
+        ok: true,
+        actions: valid,
+        instruction: valid.length === 1
+          ? '1 ação salva.'
+          : `${valid.length} ações salvas.`
+      }
     }
 
     case 'connectToHomeAssistant': {
@@ -810,8 +886,16 @@ async function executeTool(toolName, args, momai) {
     }
 
     case 'callService': {
-      const result = await connector.callService(args.domain, args.service, args.data, args.providerType || 'homeassistant')
-      return { ok: true, result }
+      safeSend({ type: 'log', message: `[callService] domain=${args.domain} service=${args.service} data=${JSON.stringify(args.data)} provider=${args.providerType || 'homeassistant'}` })
+      try {
+        const result = await connector.callService(args.domain, args.service, args.data, args.providerType || 'homeassistant')
+        safeSend({ type: 'log', message: `[callService] OK domain=${args.domain} service=${args.service} result=${JSON.stringify(result)}` })
+        return { ok: true, data: result }
+      } catch (err) {
+        const errMsg = err && err.message ? err.message : String(err)
+        safeSend({ type: 'log', message: `[callService] ERROR domain=${args.domain} service=${args.service} error=${errMsg}` })
+        return { ok: false, error: errMsg }
+      }
     }
 
     default:
