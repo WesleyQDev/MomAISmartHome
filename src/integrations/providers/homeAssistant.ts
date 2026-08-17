@@ -1,6 +1,6 @@
 const https = require('https')
 const http = require('http')
-const BaseProvider = require('../provider')
+const BaseProvider = require('../provider.ts')
 
 let WebSocket
 try {
@@ -38,6 +38,17 @@ const EXCLUDED_DOMAINS = new Set([
   'input_datetime', 'persistent_notification', 'button', 'diagnostics',
   'system_health'
 ])
+
+// Timeout de cada request HTTP para o Home Assistant. 2500ms era curto demais:
+// uma leve queda de rede / resposta lenta estourava o request, o provider era
+// marcado como desconectado na hora e a UI mostrava a tela de "desconectado".
+const REQUEST_TIMEOUT_MS = 8000
+// Falhas transitórias (rede lenta, timeout, queda breve) NÃO derrubam a conexão
+// de imediato: só marcam desconectado após N falhas consecutivas (com probe de
+// recuperação entre elas), para uma leve queda não virar a tela de desconectado.
+const TRANSIENT_ERRORS_BEFORE_DISCONNECT = 2
+// Atraso do probe de recuperação após a primeira falha transitória.
+const DISCONNECT_PROBE_DELAY_MS = 5000
 
 const COLOR_NAME_TO_RGB = {
   vermelho: [255, 0, 0],
@@ -89,18 +100,22 @@ function parseColor(color) {
 }
 
 class HomeAssistantProvider extends BaseProvider {
-  constructor(config = {}) {
+  constructor(config: any = {}) {
     super(config)
     this.name = 'Home Assistant'
     this.url = config.url || process.env.HA_URL || 'http://homeassistant.local:8123'
     this.token = config.token || process.env.HA_TOKEN || ''
     this.cachedDevices = new Map()
     this.lastError = null
+    this._lastConnectAttempt = 0
 
     this.ws = null
     this.wsConnected = false
     this.wsReconnectTimer = null
     this.wsMessageId = 0
+    this._isDisconnecting = false
+    this._transientErrCount = 0
+    this._disconnectCheckTimer = null
   }
 
   _getWsUrl() {
@@ -161,25 +176,78 @@ class HomeAssistantProvider extends BaseProvider {
       })
 
       on('close', () => {
+        if (this.ws !== ws) {
+          // Ignora fechamento de socket anterior que já foi substituído
+          return
+        }
         this.wsConnected = false
-        if (this.connected) {
+        if (!this._isDisconnecting && this.token && this.url) {
           this._scheduleWsReconnect()
         }
       })
     } catch (err) {
       console.warn('[HAProvider] Erro ao instanciar WebSocket:', err.message)
-      this._scheduleWsReconnect()
+      if (!this._isDisconnecting && this.token && this.url) {
+        this._scheduleWsReconnect()
+      }
     }
   }
 
   _setConnected(connected, error = null) {
     const changed = this.connected !== connected || (error && this.lastError !== error)
     this.connected = connected
+    // Sucesso limpa erros anteriores (senão getStatus devolve lastError stale).
+    if (connected) this.lastError = null
     if (error) this.lastError = error
     if (changed) {
       try {
         this.emit('connection_changed', { connected, error: this.lastError })
       } catch (e) {}
+    }
+  }
+
+  // Falha transitória (ha_network/ha_timeout): uma leve queda de rede não deve
+  // derrubar a conexão nem mostrar a tela de "desconectado" na UI. Mantém o
+  // provider conectado na primeira falha, agenda um probe de recuperação e só
+  // marca desconectado quando as falhas consecutivas persistem.
+  _handleTransientFailure(err) {
+    this._transientErrCount++
+    if (this.connected && this._transientErrCount < TRANSIENT_ERRORS_BEFORE_DISCONNECT) {
+      // Ainda conectado: registra o erro para diagnóstico, mas não derruba.
+      if (this.lastError !== err?.message) this.lastError = err?.message || 'Falha ao comunicar com o Home Assistant'
+      this._scheduleDisconnectProbe()
+      return
+    }
+    this._transientErrCount = 0
+    this._setConnected(false, err?.message || 'Falha ao comunicar com o Home Assistant')
+  }
+
+  _scheduleDisconnectProbe() {
+    if (this._disconnectCheckTimer) clearTimeout(this._disconnectCheckTimer)
+    this._disconnectCheckTimer = setTimeout(async () => {
+      this._disconnectCheckTimer = null
+      if (!this.connected || this._isDisconnecting || !this.url || !this.token) return
+      try {
+        await this._get('/api/config')
+        // Recuperou: zera as falhas transitórias e volta ao normal.
+        this._transientErrCount = 0
+        if (this.lastError) {
+          this.lastError = null
+          try {
+            this.emit('connection_changed', { connected: true, error: null })
+          } catch (e) {}
+        }
+      } catch (err) {
+        if (err?.code === 'ha_auth' || (err?.message && err.message.includes('401'))) {
+          this._transientErrCount = 0
+          this._setConnected(false, 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)')
+          return
+        }
+        this._handleTransientFailure(err)
+      }
+    }, DISCONNECT_PROBE_DELAY_MS)
+    if (this._disconnectCheckTimer && typeof this._disconnectCheckTimer.unref === 'function') {
+      this._disconnectCheckTimer.unref()
     }
   }
 
@@ -229,10 +297,10 @@ class HomeAssistantProvider extends BaseProvider {
 
   _scheduleWsReconnect() {
     if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer)
-    if (!this.connected) return
+    if (this._isDisconnecting || !this.url || !this.token) return
 
     this.wsReconnectTimer = setTimeout(() => {
-      if (this.connected) {
+      if (!this._isDisconnecting && this.url && this.token) {
         this._connectWebSocket()
       }
     }, 5000)
@@ -267,7 +335,7 @@ class HomeAssistantProvider extends BaseProvider {
     }
   }
 
-  _get(urlPath) {
+  _get(urlPath): Promise<any> {
     return new Promise((resolve, reject) => {
       let settled = false
       const parsedUrl = new URL(urlPath, this.url.replace(/\/$/, ''))
@@ -314,7 +382,7 @@ class HomeAssistantProvider extends BaseProvider {
         err.code = 'ha_timeout'
         req.destroy(err)
         reject(err)
-      }, 4000)
+      }, REQUEST_TIMEOUT_MS)
 
       req.on('error', (err) => {
         if (settled) return
@@ -328,7 +396,7 @@ class HomeAssistantProvider extends BaseProvider {
     })
   }
 
-  _post(urlPath, payload = {}) {
+  _post(urlPath, payload: any = {}): Promise<any> {
     return new Promise((resolve, reject) => {
       let settled = false
       const parsedUrl = new URL(urlPath, this.url.replace(/\/$/, ''))
@@ -375,7 +443,7 @@ class HomeAssistantProvider extends BaseProvider {
         err.code = 'ha_timeout'
         req.destroy(err)
         reject(err)
-      }, 4000)
+      }, REQUEST_TIMEOUT_MS)
 
       req.on('error', (err) => {
         if (settled) return
@@ -391,9 +459,21 @@ class HomeAssistantProvider extends BaseProvider {
   }
 
   async connect() {
+    this._isDisconnecting = false
     if (!this.token) {
       throw new Error('Home Assistant token is required')
     }
+
+    // Cooldown: if we failed to connect recently, skip the network attempt
+    const now = Date.now()
+    if (!this.connected && this._lastConnectAttempt && (now - this._lastConnectAttempt < 15000)) {
+      const friendly = this.lastError || `O servidor Home Assistant em ${this.url} está offline ou inacessível.`
+      const err = new Error(friendly)
+      err.code = 'ha_cooldown'
+      throw err
+    }
+    this._lastConnectAttempt = now
+
     let config = null
     let lastErr = null
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -402,7 +482,7 @@ class HomeAssistantProvider extends BaseProvider {
         break
       } catch (err) {
         lastErr = err
-        if (err.code === 'ha_network' || err.code === 'ha_auth') break
+        if (err.code === 'ha_network' || err.code === 'ha_auth' || err.code === 'ha_timeout') break
         if (attempt === 0) {
           await new Promise((r) => setTimeout(r, 200))
         }
@@ -423,6 +503,7 @@ class HomeAssistantProvider extends BaseProvider {
       err.code = code || 'ha_error'
       throw err
     }
+    this._transientErrCount = 0
     this._setConnected(true)
     this._connectWebSocket()
     return {
@@ -435,8 +516,14 @@ class HomeAssistantProvider extends BaseProvider {
   }
 
   async disconnect() {
+    this._isDisconnecting = true
+    if (this._disconnectCheckTimer) {
+      clearTimeout(this._disconnectCheckTimer)
+      this._disconnectCheckTimer = null
+    }
+    this._transientErrCount = 0
     this._setConnected(false)
-    this._closeWebSocket()
+    this._closeWebSocket(true)
     this.cachedDevices.clear()
     return { success: true, message: 'Desconectado do Home Assistant' }
   }
@@ -472,11 +559,12 @@ class HomeAssistantProvider extends BaseProvider {
       return devices
     } catch (err) {
       // Se o token/servidor caiu ou deu 401, marca desconectado para a UI mostrar o card de reconexão.
-      if (err.code === 'ha_auth' || err.code === 'ha_network' || err.code === 'ha_timeout' || (err.message && err.message.includes('401'))) {
-        const errMsg = (err.code === 'ha_auth' || (err.message && err.message.includes('401')))
-          ? 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)'
-          : err.message
-        this._setConnected(false, errMsg)
+      // Erros transitórios (rede lenta/timeout/queda breve) passam pelo grace
+      // period: uma leve queda não derruba a conexão na hora.
+      if (err.code === 'ha_auth' || (err.message && err.message.includes('401'))) {
+        this._setConnected(false, 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)')
+      } else if (err.code === 'ha_network' || err.code === 'ha_timeout') {
+        this._handleTransientFailure(err)
       } else {
         this.lastError = err.message
       }
@@ -495,20 +583,23 @@ class HomeAssistantProvider extends BaseProvider {
       this.cachedDevices.set(device.id, device)
       return device
     } catch (err) {
-      if (err.code === 'ha_auth' || err.code === 'ha_network' || err.code === 'ha_timeout') {
+      if (err.code === 'ha_auth' || (err.message && err.message.includes('401'))) {
         this.connected = false
         this.lastError = err.message
+      } else if (err.code === 'ha_network' || err.code === 'ha_timeout') {
+        // Leve queda não derruba a conexão: passa pelo grace period.
+        this._handleTransientFailure(err)
       }
       console.warn('[HAProvider] Erro ao consultar estado do dispositivo:', err.message)
       return null
     }
   }
 
-  async turnOn(deviceId, params = {}) {
+  async turnOn(deviceId, params: any = {}) {
     const device = this.cachedDevices.get(deviceId)
     const domain = deviceId.split('.')[0]
 
-    const haPayload = { entity_id: deviceId }
+    const haPayload: any = { entity_id: deviceId }
     let servicePath = `/api/services/${domain}/turn_on`
     if (domain === 'lock') {
       servicePath = `/api/services/lock/unlock`
@@ -525,7 +616,11 @@ class HomeAssistantProvider extends BaseProvider {
         if (parsed) Object.assign(haPayload, parsed)
       }
       if (params.color_temp) {
-        haPayload.color_temp_kelvin = Number(params.color_temp)
+        const kelvin = Number(params.color_temp)
+        // Valida/clampa: NaN ou fora de faixa não pode ir pro HA (B8).
+        if (Number.isFinite(kelvin)) {
+          haPayload.color_temp_kelvin = Math.max(2000, Math.min(6500, kelvin))
+        }
       }
     }
 
@@ -544,7 +639,9 @@ class HomeAssistantProvider extends BaseProvider {
       }
       if (device) {
         this.cachedDevices.set(deviceId, device)
-        this.emit('state_changed', { device, entityId: deviceId })
+        if (!this.wsConnected) {
+          this.emit('state_changed', { device, entityId: deviceId })
+        }
       }
       return { success: true, deviceId, action: 'turnOn', payload: haPayload }
     } catch (err) {
@@ -570,7 +667,9 @@ class HomeAssistantProvider extends BaseProvider {
       }
       if (device) {
         this.cachedDevices.set(deviceId, device)
-        this.emit('state_changed', { device, entityId: deviceId })
+        if (!this.wsConnected) {
+          this.emit('state_changed', { device, entityId: deviceId })
+        }
       }
       return { success: true, deviceId, action: 'turnOff' }
     } catch (err) {
@@ -593,7 +692,7 @@ class HomeAssistantProvider extends BaseProvider {
     return device?.state?.on ? this.turnOff(deviceId) : this.turnOn(deviceId)
   }
 
-  async sendRemoteCommand(deviceId, command, extra = {}) {
+  async sendRemoteCommand(deviceId, command, extra: any = {}) {
     const domain = deviceId.split('.')[0]
     const cmdUpper = String(Array.isArray(command) ? command[0] : command).toUpperCase().trim()
 
@@ -614,21 +713,27 @@ class HomeAssistantProvider extends BaseProvider {
     if (cmdUpper === 'YOUTUBE' || cmdUpper === 'NETFLIX') {
       const appId = cmdUpper === 'YOUTUBE' ? 'com.google.android.youtube.tv' : 'com.netflix.ninja'
       let executed = false
+      let lastErr = null
 
       for (const mp of mediaPlayers) {
         try {
           await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: appId })
           executed = true
-        } catch (e) {}
+        } catch (e) { lastErr = e }
       }
       for (const rm of remotes) {
         try {
           await this._post('/api/services/remote/turn_on', { entity_id: rm.entity_id, activity: appId })
           executed = true
-        } catch (e) {}
+        } catch (e) { lastErr = e }
       }
 
+      // Só reporta sucesso se ao menos uma chamada REAL executou; senão erra
+      // com a última mensagem em vez de cair no fallback genérico (M4).
       if (executed) return { success: true }
+      const msg = lastErr?.message || 'nenhuma entidade de TV/remote correspondente'
+      console.warn('[HAProvider] Falha ao abrir o app via media/remote:', msg)
+      return { success: false, error: `Não foi possível abrir ${cmdUpper}: ${msg}` }
     }
 
     const inputActivityMap = {
@@ -648,13 +753,14 @@ class HomeAssistantProvider extends BaseProvider {
     if (isInputCmd) {
       const act = inputActivityMap[cmdUpper] || 'passthrough://media_0'
       let inputExecuted = false
+      let inputLastErr = null
 
       // 1. Tentar media_player.select_source com o nome da entrada fornecido
       for (const mp of mediaPlayers) {
         try {
           await this._post('/api/services/media_player/select_source', { entity_id: mp.entity_id, source: command })
           inputExecuted = true
-        } catch (e) {}
+        } catch (e) { inputLastErr = e }
 
         // Se for comando de TV, procurar termos equivalentes no source_list oficial da TV no HA
         if (isTvCmd && Array.isArray(mp.attributes?.source_list)) {
@@ -666,7 +772,7 @@ class HomeAssistantProvider extends BaseProvider {
             try {
               await this._post('/api/services/media_player/select_source', { entity_id: mp.entity_id, source: matchedSource })
               inputExecuted = true
-            } catch (e) {}
+            } catch (e) { inputLastErr = e }
           }
         }
       }
@@ -676,12 +782,12 @@ class HomeAssistantProvider extends BaseProvider {
         try {
           await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: act })
           inputExecuted = true
-        } catch (e) {}
+        } catch (e) { inputLastErr = e }
         if (isTvCmd) {
           try {
             await this._post('/api/services/media_player/play_media', { entity_id: mp.entity_id, media_content_type: 'app', media_content_id: 'com.tcl.tv' })
             inputExecuted = true
-          } catch (e) {}
+          } catch (e) { inputLastErr = e }
         }
       }
 
@@ -690,21 +796,30 @@ class HomeAssistantProvider extends BaseProvider {
         try {
           await this._post('/api/services/remote/turn_on', { entity_id: rm.entity_id, activity: act })
           inputExecuted = true
-        } catch (e) {}
+        } catch (e) { inputLastErr = e }
 
         // 4. Tentar remote.send_command com comandos universais de entrada de TV
         for (const inputCmd of ['TV_INPUT', 'INPUT', 'TV', 'LIVE_TV']) {
           try {
             await this._post('/api/services/remote/send_command', { entity_id: rm.entity_id, command: [inputCmd] })
             inputExecuted = true
-          } catch (e) {}
+          } catch (e) { inputLastErr = e }
         }
       }
 
+      // Só reporta sucesso se ao menos uma chamada REAL executou (M4).
       if (inputExecuted) return { success: true }
+      const inputMsg = inputLastErr?.message || 'nenhuma entidade de TV/remote correspondente'
+      console.warn('[HAProvider] Falha ao trocar entrada da TV:', inputMsg)
+      return { success: false, error: `Não foi possível alternar para ${cmdUpper}: ${inputMsg}` }
     }
 
     if (domain === 'remote') {
+      // B9: send_command só é válido para entidades do domínio remote. Se um
+      // media_player chegar aqui, use o remote correspondente ou falhe claro.
+      if (typeof deviceId !== 'string' || !deviceId.startsWith('remote.')) {
+        return { success: false, error: 'Comando de controle remoto requer uma entidade do domínio remote (ex.: remote.tv_sala).' }
+      }
       const remoteCmdMap = {
         UP: 'DPAD_UP',
         DOWN: 'DPAD_DOWN',
@@ -789,9 +904,13 @@ class HomeAssistantProvider extends BaseProvider {
     }
 
     if (action === 'volume' && value !== undefined) {
+      const level = Number(value) / 100
+      if (!Number.isFinite(level)) {
+        return { success: false, error: `Nível de volume inválido: ${value}` }
+      }
       return this._post('/api/services/media_player/volume_set', {
         entity_id: deviceId,
-        volume_level: Math.max(0, Math.min(1, Number(value) / 100))
+        volume_level: Math.max(0, Math.min(1, level))
       })
     }
     if (action === 'mute') {
@@ -811,9 +930,13 @@ class HomeAssistantProvider extends BaseProvider {
   async setClimate(deviceId, temperature, hvacMode) {
     const results = []
     if (temperature !== undefined && temperature !== null) {
+      const tempNum = Number(temperature)
+      if (!Number.isFinite(tempNum)) {
+        return { success: false, error: `Temperatura inválida: ${temperature}` }
+      }
       const res = await this._post('/api/services/climate/set_temperature', {
         entity_id: deviceId,
-        temperature: Number(temperature)
+        temperature: tempNum
       })
       results.push(res)
     }
@@ -828,13 +951,25 @@ class HomeAssistantProvider extends BaseProvider {
   }
 
   async callService(domain, service, data = {}) {
+    if (!this.connected) {
+      if (this.token && this.url) {
+        try {
+          await this.connect()
+        } catch {}
+      }
+    }
     if (!this.connected) throw new Error('Not connected to Home Assistant')
+    // Segurança: valida domain/service para impedir path traversal — valores
+    // como "../config" ou "config" normalizariam para endpoints arbitrários.
+    // Domínios/serviços do HA são [a-z0-9_] (ex.: light.turn_on).
+    const SAFE_PATH_RE = /^[a-z_][a-z0-9_]*$/
+    if (typeof domain !== 'string' || !SAFE_PATH_RE.test(domain)) {
+      throw new Error('Domínio inválido. Use apenas letras minúsculas e underscore (ex.: light, media_player).')
+    }
+    if (typeof service !== 'string' || !SAFE_PATH_RE.test(service)) {
+      throw new Error('Serviço inválido. Use apenas letras minúsculas e underscore (ex.: turn_on, select_source).')
+    }
     return this._post(`/api/services/${domain}/${service}`, data)
-  }
-
-  async getHistory(entityId, startTime) {
-    const start = startTime || new Date(Date.now() - 86400000).toISOString()
-    return this._get(`/api/history/period/${start}?filter_entity_id=${entityId}`)
   }
 
   _normalizeEntity(state) {
@@ -862,7 +997,7 @@ class HomeAssistantProvider extends BaseProvider {
       isOn = rawState === 'on' || rawState === 'home' || rawState === 'open' || rawState === 'playing' || rawState === 'active' || (rawState !== 'off' && rawState !== 'unavailable' && rawState !== 'unknown' && rawState !== 'standby' && rawState !== 'closed' && rawState !== 'locked')
     }
 
-    const normalized = {
+    const normalized: any = {
       id: state.entity_id,
       name: attrs.friendly_name || state.entity_id,
       type: domainInfo.name,

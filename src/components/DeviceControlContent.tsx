@@ -97,7 +97,7 @@ export const DOMAIN_LABELS: Record<string, string> = {
   weather: 'Clima'
 }
 
-export const CONTROLLABLE_DOMAINS = [
+const CONTROLLABLE_DOMAINS_LIST = [
   'light',
   'switch',
   'fan',
@@ -112,6 +112,8 @@ export const CONTROLLABLE_DOMAINS = [
   'scene',
   'remote'
 ]
+
+export const CONTROLLABLE_DOMAINS = CONTROLLABLE_DOMAINS_LIST
 
 // Re-export Svg components for backward compatibility
 export {
@@ -240,9 +242,27 @@ export function DeviceControlCardContent({
   isOverlay?: boolean
 }) {
   const [currentDevice, setCurrentDevice] = useState<Device>(device)
+  const isUserInteractingRef = React.useRef(false)
+  // Refs espelhados dos estados de controle, atualizados a cada render, para o
+  // handler do SSE comparar com os valores MAIS RECENTES (e não com a closure
+  // stale da primeira render — que deixava isUserInteractingRef travado em
+  // true para sempre e congelava o feedback visual do card).
+  const brightnessRef = React.useRef<number>(currentDevice.state?.brightness ?? 94)
+  const isOnRef = React.useRef<boolean>(Boolean(currentDevice.state?.on))
+  const tempPctRef = React.useRef<number>(85)
+  const selectedRgbHexRef = React.useRef<string>('#f97316')
+  // Debounce para nunca deixar isUserInteractingRef travado: se o SSE não
+  // confirmar (HA sem SSE, valor fora da tolerância, etc.), o flag é resetado
+  // pouco depois da última interação, permitindo que o estado volte a ser
+  // sincronizado em vez de congelar o card até o fechamento.
+  const interactionResetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   React.useEffect(() => {
-    setCurrentDevice(device)
+    // When user is interacting (slider drag, toggle click), don't override
+    // the local state with the prop — the SSE update will arrive later.
+    if (!isUserInteractingRef.current) {
+      setCurrentDevice(device)
+    }
   }, [device])
 
   const effectiveAllDevices = React.useMemo(() => {
@@ -275,22 +295,31 @@ export function DeviceControlCardContent({
   const volumeFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   React.useEffect(() => {
+    // Only sync local state from device prop when user is NOT actively
+    // interacting with controls. This prevents SSE-pushed updates from
+    // overwriting the user's in-progress slider drag or toggle.
+    if (isUserInteractingRef.current) return
     if (currentDevice.state?.on !== undefined) {
       setIsOn(Boolean(currentDevice.state.on))
+      isOnRef.current = Boolean(currentDevice.state.on)
     }
     if (currentDevice.state?.brightness != null) {
       setBrightnessState(currentDevice.state.brightness)
+      brightnessRef.current = currentDevice.state.brightness
     }
     if (currentDevice.state?.hexColor) {
       setSelectedRgbHex(currentDevice.state.hexColor)
+      selectedRgbHexRef.current = currentDevice.state.hexColor
     } else if (Array.isArray(currentDevice.state?.rgbColor) && currentDevice.state.rgbColor.length === 3) {
       const rgb = currentDevice.state.rgbColor
       const hex = `#${rgb[0].toString(16).padStart(2, '0')}${rgb[1].toString(16).padStart(2, '0')}${rgb[2].toString(16).padStart(2, '0')}`
       setSelectedRgbHex(hex)
+      selectedRgbHexRef.current = hex
     }
     if (currentDevice.state?.colorTempKelvin) {
       const pct = Math.max(0, Math.min(100, Math.round(((6500 - currentDevice.state.colorTempKelvin) / (6500 - 2000)) * 100)))
       setTempPctState(pct)
+      tempPctRef.current = pct
     }
     if (currentDevice.domain === 'media_player') {
       if (currentDevice.state?.isPlaying !== undefined) {
@@ -330,12 +359,37 @@ export function DeviceControlCardContent({
                 updatedDevice.name.toLowerCase().trim() === volumeDevice.name.toLowerCase().trim()
 
               if (isMatchCurrent) {
-                setCurrentDevice((prev) => ({
-                  ...prev,
-                  ...updatedDevice,
-                  state: { ...prev.state, ...updatedDevice.state },
-                  attributes: { ...prev.attributes, ...updatedDevice.attributes }
-                }))
+                // Don't overwrite device state from SSE while user is actively
+                // interacting with controls — the local state is more current.
+                if (!isUserInteractingRef.current) {
+                  setCurrentDevice((prev) => ({
+                    ...prev,
+                    ...updatedDevice,
+                    state: { ...prev.state, ...updatedDevice.state },
+                    attributes: { ...prev.attributes, ...updatedDevice.attributes }
+                  }))
+                } else {
+                  // User is interacting. Check if the SSE state matches the
+                  // user's intended state — if so, the HA confirmed the change
+                  // and we can stop blocking SSE updates. Compare against the
+                  // refs (most recent values), not the stale closure.
+                  const sseBrightness = updatedDevice.state?.brightness
+                  const sseOn = updatedDevice.state?.on
+                  let confirmed = false
+                  if (sseBrightness != null && Math.abs(sseBrightness - brightnessRef.current) <= 1) {
+                    confirmed = true
+                  }
+                  if (sseOn !== undefined && sseOn === isOnRef.current) {
+                    confirmed = true
+                  }
+                  if (confirmed) {
+                    isUserInteractingRef.current = false
+                    if (interactionResetTimerRef.current) {
+                      clearTimeout(interactionResetTimerRef.current)
+                      interactionResetTimerRef.current = null
+                    }
+                  }
+                }
               }
               if (isMatchVolume && updatedDevice.state?.volume !== undefined && updatedDevice.state.volume !== null) {
                 const nextVol = volumeToPercent(updatedDevice.state.volume)
@@ -359,6 +413,10 @@ export function DeviceControlCardContent({
     return () => {
       if (volumeFeedbackTimerRef.current) {
         clearTimeout(volumeFeedbackTimerRef.current)
+      }
+      if (interactionResetTimerRef.current) {
+        clearTimeout(interactionResetTimerRef.current)
+        interactionResetTimerRef.current = null
       }
     }
   }, [])
@@ -391,6 +449,8 @@ export function DeviceControlCardContent({
   async function defaultCallService(domain: string, service: string, data: any = {}, providerType = 'homeassistant') {
     const baseUrl = getApiBaseUrl()
     const token = getSessionToken()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
     try {
       const res = await fetch(`${baseUrl}/extensions/momaismarthome/command`, {
         method: 'POST',
@@ -401,23 +461,42 @@ export function DeviceControlCardContent({
         body: JSON.stringify({
           toolName: 'callService',
           args: { domain, service, data, providerType }
-        })
+        }),
+        signal: controller.signal
       })
       return await res.json()
     } catch (err) {
-      console.error('[DeviceControlContent] Erro ao chamar serviço:', err)
+      console.error('[SmartHome] defaultCallService error:', err)
+    } finally {
+      clearTimeout(timer)
     }
   }
 
   const executeService = async (domain: string, service: string, data: any) => {
     if (callServiceApi) {
-      const res = await callServiceApi(domain, service, data, 'homeassistant')
-      if (res !== undefined) return res
+      try {
+        console.log(`[SmartHome] executeService via callServiceApi: ${domain}/${service}`)
+        const res = await callServiceApi(domain, service, data, 'homeassistant')
+        console.log('[SmartHome] executeService callServiceApi result:', JSON.stringify(res))
+        if (res !== undefined) return res
+      } catch (err) {
+        console.error('[SmartHome] callServiceApi failed:', err)
+      }
     }
+    
     const winApi = (window as any).api
     if (typeof winApi?.callService === 'function') {
-      return winApi.callService(domain, service, data, 'homeassistant')
+      try {
+        console.log(`[SmartHome] executeService via winApi.callService: ${domain}/${service}`)
+        const res = await winApi.callService(domain, service, data, 'homeassistant')
+        console.log('[SmartHome] executeService winApi result:', JSON.stringify(res))
+        return res
+      } catch (err) {
+        console.error('[SmartHome] window.api.callService failed:', err)
+      }
     }
+    
+    console.log(`[SmartHome] executeService via defaultCallService: ${domain}/${service}`)
     return defaultCallService(domain, service, data, 'homeassistant')
   }
 
@@ -442,62 +521,108 @@ export function DeviceControlCardContent({
             args: { deviceId: volumeDevice.id, providerType: 'homeassistant' }
           })
         })
-        if (!response.ok) return
+        if (!response.ok) {
+          console.log('[SmartHome] syncVolumeFromHomeAssistant: HTTP', response.status)
+          return
+        }
 
         const result = await response.json()
         const refreshedDevice = result?.device as Device | null
-        if (disposed || refreshedDevice?.state?.volume == null) return
+        if (disposed || refreshedDevice?.state?.volume == null) {
+          console.log('[SmartHome] syncVolumeFromHomeAssistant: volume is null/undefined', JSON.stringify(result?.device?.state))
+          return
+        }
 
         const nextVolumePercent = volumeToPercent(refreshedDevice.state.volume)
+        console.log(`[SmartHome] syncVolumeFromHomeAssistant: volume=${refreshedDevice.state.volume} -> ${nextVolumePercent}%`)
         volumePercentRef.current = nextVolumePercent
         setVolumePercent(nextVolumePercent)
-      } catch {
-        // The local value remains visible while Home Assistant is temporarily unavailable.
+      } catch (err) {
+        console.error('[SmartHome] syncVolumeFromHomeAssistant error:', err)
       } finally {
         syncing = false
       }
     }
 
     void syncVolumeFromHomeAssistant()
-    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 1000)
+    // Poll de volume só para dar feedback enquanto o controle de mídia está
+    // aberto; 2,5s é suficiente (o SSE já cobre updates em tempo real quando
+    // conectado) e evita martelar o worker a cada segundo.
+    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 2500)
     return () => {
       disposed = true
       window.clearInterval(intervalId)
     }
   }, [device.domain, volumeDevice.id, volumeDevice.name])
 
-  const handleBrightnessChange = async (pct: number) => {
+  // Marca o início de uma interação do usuário e agenda um reset de segurança:
+  // se o SSE de confirmação não chegar (HA sem WebSocket/SSE, valor fora da
+  // tolerância, etc.), o flag volta a false pouco depois, desbloqueando o
+  // sync de estado — sem isso o card ficava congelado até ser fechado.
+  const beginUserInteraction = () => {
+    isUserInteractingRef.current = true
+    if (interactionResetTimerRef.current) {
+      clearTimeout(interactionResetTimerRef.current)
+    }
+    interactionResetTimerRef.current = setTimeout(() => {
+      isUserInteractingRef.current = false
+      interactionResetTimerRef.current = null
+    }, 800)
+  }
+
+  const handleBrightnessChange = (pct: number) => {
+    beginUserInteraction()
     setBrightnessState(pct)
-    await executeService('light', 'turn_on', {
+    brightnessRef.current = pct
+    if (pct > 0 && !isOn) setIsOn(true)
+    if (pct === 0 && isOn) setIsOn(false)
+    executeService('light', 'turn_on', {
       entity_id: device.id,
       brightness_pct: pct
+    }).catch(() => {
+      isUserInteractingRef.current = false
     })
   }
 
-  const handleTempSliderChange = async (pct: number) => {
+  const handleTempSliderChange = (pct: number) => {
+    beginUserInteraction()
     setTempPctState(pct)
+    tempPctRef.current = pct
+    if (!isOn) setIsOn(true)
     const kelvinVal = Math.round(6500 - (pct / 100) * (6500 - 2000))
-    await executeService('light', 'turn_on', {
+    executeService('light', 'turn_on', {
       entity_id: device.id,
       color_temp_kelvin: kelvinVal
+    }).catch(() => {
+      isUserInteractingRef.current = false
     })
   }
 
-  const handleColorChange = async (rgb: [number, number, number], hex: string) => {
+  const handleColorChange = (rgb: [number, number, number], hex: string) => {
+    beginUserInteraction()
     setSelectedRgbHex(hex)
-    await executeService('light', 'turn_on', {
+    selectedRgbHexRef.current = hex
+    if (!isOn) setIsOn(true)
+    executeService('light', 'turn_on', {
       entity_id: device.id,
       rgb_color: rgb
+    }).catch(() => {
+      isUserInteractingRef.current = false
     })
   }
 
   const handleToggle = () => {
-    setIsOn(!isOn)
+    const nextState = !isOn
+    beginUserInteraction()
+    setIsOn(nextState)
+    isOnRef.current = nextState
     if (onToggle) {
-      onToggle(device)
-    } else {
-      executeService(device.domain || 'homeassistant', isOn ? 'turn_off' : 'turn_on', { entity_id: device.id })
+      onToggle({ ...device, state: { ...device.state, on: nextState } })
     }
+    executeService('light', nextState ? 'turn_on' : 'turn_off', { entity_id: device.id })
+      .catch(() => {
+        isUserInteractingRef.current = false
+      })
   }
 
   const handleSendRemoteCommand = async (command: string) => {
@@ -727,7 +852,27 @@ export function DeviceControlCardContent({
     }
     volumeFeedbackTimerRef.current = setTimeout(() => setActiveVolumeButton(null), 1200)
 
-    await executeService('media_player', direction === 'up' ? 'volume_up' : 'volume_down', { entity_id: volumeDevice.id })
+    const service = direction === 'up' ? 'volume_up' : 'volume_down'
+    console.log(`[SmartHome] handleVolumeChange ${direction} -> ${nextVolumePercent}% device=${volumeDevice.id}`)
+    
+    // Try volume_up/volume_down first (works on most media players).
+    // Fall back to volume_set if the relative services are not supported.
+    let result = await executeService('media_player', service, { entity_id: volumeDevice.id })
+    console.log('[SmartHome] handleVolumeChange result:', JSON.stringify(result))
+    
+    if (result && result.ok === false) {
+      const volumeLevel = nextVolumePercent / 100
+      console.log('[SmartHome] handleVolumeChange: relative service failed, trying volume_set')
+      result = await executeService('media_player', 'volume_set', { entity_id: volumeDevice.id, volume_level: volumeLevel })
+      console.log('[SmartHome] handleVolumeChange volume_set result:', JSON.stringify(result))
+    }
+    
+    // If the command failed, revert to the previous volume
+    if (result && result.ok === false) {
+      const revertedVolume = volumePercentRef.current - (direction === 'up' ? 10 : -10)
+      volumePercentRef.current = Math.max(0, Math.min(100, revertedVolume))
+      setVolumePercent(volumePercentRef.current)
+    }
   }
 
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, '#ffffff')
@@ -957,17 +1102,37 @@ export function DeviceControlCardContent({
           </div>
         )}
 
-        <div className="sh-light-ctrl-bar" style={isOverlay ? { WebkitAppRegion: 'no-drag' } as any : undefined}>
-          <button className={`sh-light-ctrl-btn ${activeTab === 'brightness' ? 'active' : ''}`} onClick={() => setActiveTab('brightness')}>
+        <div className="sh-light-ctrl-bar" style={isOverlay ? { WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as any : undefined}>
+          <button
+            className={`sh-light-ctrl-btn ${activeTab === 'brightness' ? 'active' : ''}`}
+            onClick={() => setActiveTab('brightness')}
+            style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as any}
+          >
             <SvgSun size={20} />
           </button>
-          <button className={`sh-light-ctrl-btn ${activeTab === 'color' ? 'active' : ''}`} onClick={() => setActiveTab('color')}>
+          <button
+            className={`sh-light-ctrl-btn ${activeTab === 'color' ? 'active' : ''}`}
+            onClick={() => setActiveTab('color')}
+            style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as any}
+          >
             <SvgColorWheel size={22} />
           </button>
-          <button className={`sh-light-ctrl-btn ${activeTab === 'temp' ? 'active' : ''}`} onClick={() => setActiveTab('temp')}>
+          <button
+            className={`sh-light-ctrl-btn ${activeTab === 'temp' ? 'active' : ''}`}
+            onClick={() => setActiveTab('temp')}
+            style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as any}
+          >
             <SvgTemp size={22} />
           </button>
-          <button className={`sh-light-ctrl-btn ${isOn ? 'active' : ''}`} onClick={handleToggle} style={isOn ? { background: '#ef4444', color: '#fff' } : undefined}>
+          <button
+            className={`sh-light-ctrl-btn ${isOn ? 'active' : ''}`}
+            onClick={handleToggle}
+            style={{
+              WebkitAppRegion: 'no-drag',
+              pointerEvents: 'auto',
+              ...(isOn ? { background: '#ef4444', color: '#fff' } : {})
+            } as any}
+          >
             <SvgPower size={20} />
           </button>
         </div>

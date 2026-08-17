@@ -2,7 +2,17 @@ process.env.DB_PATH = ':memory:'
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const MomAIHomeConnector = require('./src/index')
+// Isola o data dir (ações de automação, .encryption-key) num dir temporário
+// para os testes não gravarem no repositório nem dependerem do ambiente.
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'momai-smarthome-data-'))
+process.env.MOMAI_DATA_DIR = testDataDir
+const MomAIHomeConnector = require('./src/index.ts')
+
+function cleanupTestData() {
+  try {
+    fs.rmSync(testDataDir, { recursive: true, force: true })
+  } catch {}
+}
 
 async function runTests() {
   console.log('=== MomAI Smart Home - Test Runner ===\n')
@@ -44,8 +54,8 @@ async function runTests() {
   assert('disconnectAll() retorna success', discResult && discResult.success === true)
 
   // Test 5: Connection storage round-trip
-  const TokenManager = require('./src/auth/tokenManager')
-  const DatabaseManager = require('./src/database/database')
+  const TokenManager = require('./src/auth/tokenManager.ts')
+  const DatabaseManager = require('./src/database/database.ts')
   const db = new DatabaseManager()
   const tm = new TokenManager(db)
 
@@ -88,7 +98,7 @@ async function runTests() {
   fs.rmSync(migrationDir, { recursive: true, force: true })
 
   // Test 6: runtime.js tool export check
-  const runtime = require('./runtime')
+  const runtime = require('./runtime.ts')
   assert('runtime.tools é array', Array.isArray(runtime.tools))
   assert('runtime.tools contém set_light_color', runtime.tools.some(t => t.name === 'set_light_color'))
   assert('runtime.tools contém control_tv_remote', runtime.tools.some(t => t.name === 'control_tv_remote'))
@@ -202,11 +212,11 @@ async function runTests() {
   fs.rmSync(firstStorageDir, { recursive: true, force: true })
   fs.rmSync(secondStorageDir, { recursive: true, force: true })
 
-  let eventDispatched = false
-  let lastOverlayPayload = null
+  let eventDispatched: boolean = false
+  let lastOverlayPayload: any = null
   const mockMomaiWithEvent = {
     ...mockMomai,
-    sendEvent(type, payload) {
+    sendEvent(type: string, payload: any) {
       if (type === 'open_overlay') {
         eventDispatched = true
         lastOverlayPayload = payload
@@ -233,11 +243,43 @@ async function runTests() {
   })
 
   assert('open_device_control com objeto único desempacota e executa', openRes && openRes.ok === true)
-  assert('open_device_control dispara momai.sendEvent(open_overlay)', eventDispatched === true)
+  assert('open_device_control dispara momai.sendEvent(open_overlay)', Boolean(eventDispatched))
   assert('open_device_control usa strategy replace (um único overlay)', lastOverlayPayload && lastOverlayPayload.strategy === 'replace')
   assert('open_device_control envia overlayId do dispositivo', lastOverlayPayload && lastOverlayPayload.overlayId === 'media_player.tv_quarto')
+  assert('open_device_control define overlaySize TV com altura >= 520', lastOverlayPayload && lastOverlayPayload.overlaySize.height >= 520)
 
-  let toggled = false
+  // Teste de overlay para luz
+  let lightEventDispatched = false
+  let lastLightOverlayPayload: any = null
+  const mockMomaiWithLightEvent = {
+    ...mockMomai,
+    sendEvent: (type: string, payload: any) => {
+      if (type === 'open_overlay') {
+        lightEventDispatched = true
+        lastLightOverlayPayload = payload
+      }
+    }
+  }
+  MomAIHomeConnector.devices.providers.set('homeassistant', {
+    listDevices: async () => [
+      {
+        id: 'light.quarto',
+        name: 'Luz do Quarto',
+        domain: 'light',
+        provider: 'homeassistant',
+        state: { on: true }
+      }
+    ]
+  })
+  const openLightRes = await runtime.executeTool({
+    toolName: 'open_device_control',
+    args: { device_name: 'Luz do Quarto' },
+    momai: mockMomaiWithLightEvent
+  })
+  assert('open_device_control luz abre com sucesso', openLightRes && openLightRes.ok === true && Boolean(lightEventDispatched))
+  assert('open_device_control luz usa dimensões sem cortes (>= 540h, >= 320w)', lastLightOverlayPayload && lastLightOverlayPayload.overlaySize.height >= 540 && lastLightOverlayPayload.overlaySize.width >= 320)
+
+  let toggled: boolean = false
   MomAIHomeConnector.devices.providers.set('homeassistant', {
     listDevices: async () => [
       {
@@ -258,16 +300,16 @@ async function runTests() {
     device_name: 'Luz da Sala',
     action: 'toggle'
   }, mockMomai)
-  assert('control_device usa toggle real', toggleRes && toggleRes.ok === true && toggled === true)
+  assert('control_device usa toggle real', toggleRes && toggleRes.ok === true && Boolean(toggled))
 
   const lastConnection = await MomAIHomeConnector.getLastConnection(mockMomai)
   assert('getLastConnection devolve url e token para persistência na UI', lastConnection && lastConnection.url && lastConnection.token)
 
-  const HomeAssistantProvider = require('./src/integrations/providers/homeAssistant')
+  const HomeAssistantProvider = require('./src/integrations/providers/homeAssistant.ts')
   const provider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
   provider.connected = true
-  const serviceCalls = []
-  provider._post = async (path, payload) => {
+  const serviceCalls: any[] = []
+  provider._post = async (path: string, payload: any) => {
     serviceCalls.push({ path, payload })
     return { ok: true }
   }
@@ -377,14 +419,31 @@ async function runTests() {
   const migratedLegacy = JSON.parse(await db.get(`SELECT config_encrypted FROM connections WHERE id = ?`, ['legacy_plain']).then((row) => row.config_encrypted))
   assert('TokenManager lê e migra conexão legada plaintext', legacyConnection && legacyConnection.config.token === 'legacy_token' && migratedLegacy.encryptedData && migratedLegacy.iv && migratedLegacy.authTag)
 
-  const legacyTokenManager = new TokenManager(db)
+const legacyTokenManager = new TokenManager(db)
   legacyTokenManager.encryptionSecret = 'momai_home_connector_secret_32b'
   await db.run(
     `INSERT INTO connections (id, provider_type, name, config_encrypted, user_email) VALUES (?, ?, ?, ?, ?)`,
     ['legacy_encrypted', 'homeassistant', 'Legacy Encrypted HA', JSON.stringify(legacyTokenManager.encrypt({ url: 'http://legacy.local:8123', token: 'legacy_encrypted_token' })), 'local']
   )
+  // Sem chave legada disponível (nem env nem arquivo), a credencial legada não
+  // deve ser legível — e não deve crashar.
+  delete process.env.MOMAI_SMARTHOME_LEGACY_KEY
+  const legacyKeyBlocked = await tm.getConnection('legacy_encrypted')
+  assert('credencial legada ilegível sem chave de migração (env/file)', legacyKeyBlocked === null)
+
+  // Com a chave legada via env (config local, nunca versionada), lê e
+  // re-criptografa com a chave real (migração legada → nova chave, A1).
+  process.env.MOMAI_SMARTHOME_LEGACY_KEY = 'momai_home_connector_secret_32b'
   const legacyEncryptedConnection = await tm.getConnection('legacy_encrypted')
-  assert('TokenManager lê e migra conexão legada criptografada', legacyEncryptedConnection && legacyEncryptedConnection.config.token === 'legacy_encrypted_token')
+  assert('TokenManager lê e migra conexão legada criptografada via chave de migração', legacyEncryptedConnection && legacyEncryptedConnection.config.token === 'legacy_encrypted_token')
+  const legacyMigratedRow = JSON.parse(await db.get(`SELECT config_encrypted FROM connections WHERE id = ?`, ['legacy_encrypted']).then((row) => row.config_encrypted))
+  const reReadLegacy = await tm.getConnection('legacy_encrypted')
+  assert('legada re-criptografada com a chave real após leitura', reReadLegacy && reReadLegacy.config.token === 'legacy_encrypted_token' && legacyMigratedRow.iv && legacyMigratedRow.encryptedData)
+  // A chave de migração NÃO faz parte do código versionado: a constante legada
+  // não existe mais em tokenManager.ts.
+  const tokenManagerSource = fs.readFileSync(path.join(__dirname, 'src', 'auth', 'tokenManager.ts'), 'utf8')
+  assert('chave legada não fica hardcoded no fonte', !tokenManagerSource.includes('momai_home_connector_secret_32b'))
+  delete process.env.MOMAI_SMARTHOME_LEGACY_KEY
 
   // Test 12: listDevices tenta reconectar quando provido de URL e Token mas desconnectado
   const offlineProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
@@ -409,6 +468,93 @@ async function runTests() {
   const listErrRes = await runtime.executeTool('list_devices', {}, mockMomai)
   assert('list_devices retorna erro descritivo quando desconectado', listErrRes && listErrRes.ok === false && typeof listErrRes.error === 'string')
 
+  // Test 14: get_actions/set_actions round-trip (A2)
+  const getActionsEmpty = await runtime.executeTool('get_actions', {}, mockMomai)
+  assert('get_actions retorna array (vazio inicialmente)', getActionsEmpty && Array.isArray(getActionsEmpty.actions))
+  const setActionsRes = await runtime.executeTool('set_actions', {
+    actions: [
+      { id: 'act-1', target: 'momaismarthome', tool: 'control_device', args: { device_name: 'luz' }, when: { device: 'luz' } },
+      { id: 'act-bad', tool: 'control_device' }
+    ]
+  }, mockMomai)
+  assert('set_actions filtra ações sem target', setActionsRes && setActionsRes.ok === true && Array.isArray(setActionsRes.actions) && setActionsRes.actions.length === 1)
+  const getActionsRoundTrip = await runtime.executeTool('get_actions', {}, mockMomai)
+  assert('get/set_actions round-trip preserva a ação válida', getActionsRoundTrip.actions.length === 1 && getActionsRoundTrip.actions[0].id === 'act-1' && getActionsRoundTrip.actions[0].when.device === 'luz')
+  const setActionsNonArray = await runtime.executeTool('set_actions', { actions: 'invalido' }, mockMomai)
+  assert('set_actions com payload não-array não quebra (salva vazio)', setActionsNonArray.ok === true && Array.isArray(setActionsNonArray.actions))
+
+  // Test 15: callService valida domain/service (M8 - path traversal)
+  const haServiceProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  haServiceProvider.connected = true
+  let lastServicePath = null
+  haServiceProvider._post = async (p) => { lastServicePath = p; return { ok: true } }
+  let traversalRejected = false
+  try { await haServiceProvider.callService('..', 'config', {}) } catch (e) { traversalRejected = true }
+  assert('callService rejeita domain com ../', traversalRejected)
+  traversalRejected = false
+  try { await haServiceProvider.callService('light', '../config', {}) } catch (e) { traversalRejected = true }
+  assert('callService rejeita service com ../', traversalRejected)
+  traversalRejected = false
+  try { await haServiceProvider.callService('light', 'turn.on', {}) } catch (e) { traversalRejected = true }
+  assert('callService rejeita ponto no service', traversalRejected)
+  await haServiceProvider.callService('light', 'turn_on', { entity_id: 'light.x' })
+  assert('callService aceita domain/service válidos', lastServicePath === '/api/services/light/turn_on')
+  await haServiceProvider.disconnect()
+
+  // Test 16: list_devices mapeia estado real de sensor/clima (M5)
+  MomAIHomeConnector.isConnected = true
+  MomAIHomeConnector.devices.providers.set('homeassistant', {
+    listDevices: async () => [
+      { id: 'sensor.temperatura', name: 'Temp', domain: 'sensor', provider: 'homeassistant', state: { on: false, rawState: '22.5', value: '22.5' } },
+      { id: 'climate.sala', name: 'AC', domain: 'climate', provider: 'homeassistant', state: { on: true, rawState: 'cool' } },
+      { id: 'light.sala', name: 'Luz', domain: 'light', provider: 'homeassistant', state: { on: true, rawState: 'on' } }
+    ]
+  })
+  const listDevicesRes = await runtime.executeTool('list_devices', {}, mockMomai)
+  const listSensor = listDevicesRes.devices.find((d) => d.id === 'sensor.temperatura')
+  const listClimate = listDevicesRes.devices.find((d) => d.id === 'climate.sala')
+  const listLight = listDevicesRes.devices.find((d) => d.id === 'light.sala')
+  assert('list_devices mostra sensor com estado real (não "off")', listSensor && listSensor.state === '22.5')
+  assert('list_devices mostra clima pelo modo (cool → frio)', listClimate && listClimate.state === 'frio')
+  assert('list_devices mostra light ligada como on', listLight && listLight.state === 'on')
+
+  // Test 17: mutex serializa ensureConnected/init (M2)
+  const ConnectorCls = MomAIHomeConnector.MomAIHomeConnector
+  const mutexConnector = new ConnectorCls({ dbPath: ':memory:' })
+  let maxConcurrent = 0
+  let activeInits = 0
+  let initCallCount = 0
+  mutexConnector.init = async (momai) => {
+    activeInits++
+    maxConcurrent = Math.max(maxConcurrent, activeInits)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    activeInits--
+    initCallCount++
+    return mutexConnector.getStatus()
+  }
+  mutexConnector.devices.getStatus = () => ({ providers: {}, connected: false })
+  mutexConnector.getStatus = () => ({ connected: false, connections: [], providerStatus: { providers: {}, connected: false } })
+  await Promise.all([
+    mutexConnector.ensureConnected({}),
+    mutexConnector.ensureConnected({}),
+    mutexConnector.ensureConnected({})
+  ])
+  assert('ensureConnected serializa chamadas concorrentes (nunca 2 init em paralelo)', maxConcurrent === 1 && initCallCount === 3)
+  await mutexConnector.dbManager.close()
+
+  // Test 18: sendRemoteCommand não reporta sucesso quando TODAS as chamadas
+  // falharam (M4)
+  const failProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  failProvider.connected = true
+  failProvider._get = async () => []
+  failProvider._post = async () => { throw new Error('HA indisponível') }
+  const failRes = await failProvider.sendRemoteCommand('media_player.tv_quarto', 'YOUTUBE')
+  assert('sendRemoteCommand sem entidades não retorna success:true', failRes && failRes.success === false && typeof failRes.error === 'string')
+  const failInputRes = await failProvider.sendRemoteCommand('media_player.tv_quarto', 'HDMI 1')
+  assert('troca de entrada com falha total retorna success:false', failInputRes && failInputRes.success === false)
+  await failProvider.disconnect()
+
+  cleanupTestData()
   await db.close()
   console.log(`\n=== Resultado: ${passed} passaram, ${failed} falharam ===`)
   process.exit(failed > 0 ? 1 : 0)

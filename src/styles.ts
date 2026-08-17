@@ -398,15 +398,16 @@ export const SMART_HOME_CSS = `
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    border-radius: 28px; padding: 24px 20px;
+    border-radius: 28px; padding: 22px 18px;
     max-width: 100%; width: 100%; height: 100%; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     position: relative; box-sizing: border-box;
+    display: flex; flex-direction: column; justify-content: space-between; overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
   }
   .sh-modal-close-btn {
-    position: absolute; top: 18px; right: 18px;
+    position: absolute; top: 16px; right: 16px;
     background: rgba(255,255,255,0.1); border: none;
-    color: #cbd5e1; width: 36px; height: 36px; border-radius: 50%;
+    color: #cbd5e1; width: 34px; height: 34px; border-radius: 50%;
     cursor: pointer !important; display: flex; align-items: center; justify-content: center;
     -webkit-app-region: no-drag !important;
     z-index: 99999 !important;
@@ -418,43 +419,50 @@ export const SMART_HOME_CSS = `
     color: #ffffff !important;
     transform: scale(1.08);
   }
-  .sh-light-readout { font-size: 44px; font-weight: 800; color: #ffffff; text-align: center; margin-top: 14px; line-height: 1; letter-spacing: -1px; }
-  .sh-light-subreadout { font-size: 13px; color: #94a3b8; text-align: center; margin-bottom: 22px; font-weight: 500; margin-top: 4px; }
+  .sh-light-readout { font-size: 38px; font-weight: 800; color: #ffffff; text-align: center; margin-top: 8px; line-height: 1; letter-spacing: -1px; }
+  .sh-light-subreadout { font-size: 13px; color: #94a3b8; text-align: center; margin-bottom: 16px; font-weight: 500; margin-top: 4px; }
 
   .sh-pill-slider-container {
-    width: 124px; height: 240px; border-radius: 62px; background: rgba(0, 0, 0, 0.4);
-    margin: 0 auto 22px; position: relative; overflow: hidden; cursor: pointer;
+    width: 112px; height: 210px; border-radius: 56px; background: rgba(0, 0, 0, 0.4);
+    margin: 0 auto 16px; position: relative; overflow: hidden; cursor: pointer;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
   .sh-pill-slider-fill {
-    position: absolute; bottom: 0; left: 0; right: 0; border-radius: 0 0 62px 62px; transition: height 0.15s ease-out, background 0.2s; display: flex; justify-content: center; align-items: flex-start;
+    position: absolute; bottom: 0; left: 0; right: 0; border-radius: 0 0 56px 56px; transition: height 0.15s ease-out, background 0.2s; display: flex; justify-content: center; align-items: flex-start;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
-  .sh-pill-handle { width: 34px; height: 4px; background: rgba(0,0,0,0.3); border-radius: 9999px; margin-top: 12px; }
+  .sh-pill-handle { width: 32px; height: 4px; background: rgba(0,0,0,0.3); border-radius: 9999px; margin-top: 10px; -webkit-app-region: no-drag !important; }
 
   .sh-light-ctrl-bar {
-    display: flex; justify-content: center; align-items: center; gap: 10px;
-    background: rgba(0, 0, 0, 0.4); padding: 6px 14px; border-radius: 9999px;
-    margin: 0 auto 22px; width: fit-content;
+    display: flex; justify-content: center; align-items: center; gap: 8px;
+    background: rgba(0, 0, 0, 0.4); padding: 5px 12px; border-radius: 9999px;
+    margin: 0 auto 8px; width: fit-content;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
   .sh-light-ctrl-btn {
-    width: 42px; height: 42px; border-radius: 50%; border: none; background: transparent; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: 50%; border: none; background: transparent; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
   .sh-light-ctrl-btn.active { background: #ffffff; color: #18181c; }
+  .sh-light-ctrl-btn svg { pointer-events: none; }
 
   .sh-color-wheel {
-    width: 230px; height: 230px; border-radius: 50%; margin: 8px auto 22px; position: relative;
+    width: 200px; height: 200px; border-radius: 50%; margin: 4px auto 14px; position: relative;
     background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
     mask-image: radial-gradient(circle, #fff 100%, transparent 100%);
     cursor: crosshair; touch-action: none;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
   .sh-color-wheel::after {
     content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; border-radius: 50%;
     background: radial-gradient(circle, rgba(255,255,255,1) 0%, rgba(255,255,255,0) 80%);
+    -webkit-app-region: no-drag !important;
   }
   .sh-color-wheel-handle {
     position: absolute; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #ffffff; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; background: rgba(255,255,255,0.3);
   }
-  .sh-color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; max-width: 250px; margin: 0 auto; justify-items: center; }
-  .sh-color-circle { width: 46px; height: 46px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+  .sh-color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; max-width: 250px; margin: 0 auto; justify-items: center; -webkit-app-region: no-drag !important; }
+  .sh-color-circle { width: 46px; height: 46px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-color-circle:hover { transform: scale(1.06); border-color: rgba(255,255,255,0.8); }
 
   .sh-remote-header { margin-bottom: 18px; }
@@ -464,38 +472,39 @@ export const SMART_HOME_CSS = `
 
   .sh-dpad-ring {
     width: 185px; height: 185px; border-radius: 50%; background: rgba(0,0,0,0.35); margin: 0 auto 22px; position: relative; display: flex; align-items: center; justify-content: center;
+    -webkit-app-region: no-drag !important; pointer-events: auto !important;
   }
-  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), color 0.1s ease, filter 0.1s ease; border-radius: 50%; user-select: none; }
+  .sh-dpad-btn { position: absolute; background: none; border: none; color: #cbd5e1; font-size: 14px; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), color 0.1s ease, filter 0.1s ease; border-radius: 50%; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-dpad-btn:hover { color: #fff; transform: scale(1.18); }
   .sh-dpad-btn:active { color: #a78bfa; transform: scale(0.88); filter: brightness(0.8); }
   .sh-dpad-btn.up { top: 4px; }
   .sh-dpad-btn.down { bottom: 4px; }
   .sh-dpad-btn.left { left: 4px; }
   .sh-dpad-btn.right { right: 4px; }
-  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-dpad-center { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #fff; font-size: 14.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-dpad-center:hover { background: #8b5cf6; transform: scale(1.05); box-shadow: 0 4px 14px rgba(139,92,246,0.4); }
   .sh-dpad-center:active { transform: scale(0.90) translateY(2px); background: #7c3aed; box-shadow: inset 0 3px 6px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
-  .sh-remote-actions-row { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: nowrap; }
-  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-actions-row { display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: nowrap; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
+  .sh-remote-action-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-remote-action-btn:hover { transform: scale(1.08); background: rgba(255,255,255,0.12); color: #fff; box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
   .sh-remote-action-btn:hover, .sh-remote-action-btn.active { background: #8b5cf6; color: #fff; }
   .sh-remote-action-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
-  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.youtube-pill { width: auto; height: 42px; padding: 0 10px; border-radius: 10px; background: #ffffff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-remote-action-btn.youtube-pill:hover { transform: scale(1.06); box-shadow: 0 3px 10px rgba(255,255,255,0.3); }
   .sh-remote-action-btn.youtube-pill:active { transform: scale(0.90) translateY(2px) !important; filter: brightness(0.9) !important; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3) !important; }
-  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-action-btn.power { background: #ef4444 !important; color: #ffffff !important; border: none !important; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-remote-action-btn.power:hover { transform: scale(1.08); box-shadow: 0 4px 12px rgba(239,68,68,0.4); }
   .sh-remote-action-btn.power:active { transform: scale(0.88) translateY(2px) !important; filter: brightness(0.85) !important; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5) !important; }
 
-  .sh-input-selector-popover { background: rgba(24, 24, 28, 0.95); border: none !important; border-radius: 16px; padding: 12px; margin: 0 auto 18px; max-width: 310px; box-shadow: 0 10px 24px rgba(0,0,0,0.5); animation: shFadeIn 0.2s ease-out; }
-  .sh-input-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
-  .sh-input-chip { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-input-selector-popover { background: rgba(24, 24, 28, 0.95); border: none !important; border-radius: 16px; padding: 12px; margin: 0 auto 18px; max-width: 310px; box-shadow: 0 10px 24px rgba(0,0,0,0.5); animation: shFadeIn 0.2s ease-out; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
+  .sh-input-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; -webkit-app-region: no-drag !important; }
+  .sh-input-chip { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px 8px; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-input-chip:hover { background: #8b5cf6; color: #fff; transform: scale(1.03); box-shadow: 0 3px 8px rgba(139,92,246,0.3); }
   .sh-input-chip:active { transform: scale(0.93) translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); filter: brightness(0.85); }
 
-  .sh-remote-media-row, .sh-remote-vol-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
-  .sh-volume-control { position: relative; display: flex; align-items: center; justify-content: center; }
+  .sh-remote-media-row, .sh-remote-vol-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
+  .sh-volume-control { position: relative; display: flex; align-items: center; justify-content: center; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-volume-feedback {
     position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%);
     min-width: 48px; padding: 6px 8px; box-sizing: border-box; border-radius: 9999px;
@@ -509,7 +518,7 @@ export const SMART_HOME_CSS = `
   .sh-volume-control:hover .sh-volume-feedback, .sh-volume-feedback.active {
     opacity: 1; visibility: visible; transform: translate(-50%, 0) scale(1);
   }
-  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; }
+  .sh-remote-icon-btn { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, box-shadow 0.1s ease, filter 0.1s ease; user-select: none; -webkit-app-region: no-drag !important; pointer-events: auto !important; }
   .sh-remote-icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; transform: scale(1.08); box-shadow: 0 3px 8px rgba(0,0,0,0.3); }
   .sh-remote-icon-btn:active { transform: scale(0.88) translateY(2px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); filter: brightness(0.85); }
   .sh-remote-icon-btn.main { background: #8b5cf6; color: #fff; border: none; }

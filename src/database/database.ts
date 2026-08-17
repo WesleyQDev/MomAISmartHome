@@ -1,9 +1,12 @@
 const BetterSqlite3 = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
-const { DEFAULT_DB_PATH } = require('../config/constants');
+const { DEFAULT_DB_PATH } = require('../config/constants.ts');
 
 class DatabaseManager {
+  dbPath: string = process.env.DB_PATH || DEFAULT_DB_PATH
+  db: any = null
+
   constructor(dbPath = process.env.DB_PATH || DEFAULT_DB_PATH) {
     this.dbPath = dbPath;
     this.db = null;

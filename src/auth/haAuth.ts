@@ -1,5 +1,8 @@
 class HomeAssistantAuth {
-  constructor(options = {}) {
+  url: string = ''
+  token: string = ''
+
+  constructor(options: any = {}) {
     this.url = options.url || process.env.HA_URL || 'http://homeassistant.local:8123'
     this.token = options.token || process.env.HA_TOKEN || ''
   }
@@ -15,18 +18,6 @@ class HomeAssistantAuth {
 
   getToken() {
     return this.token
-  }
-
-  isConfigured() {
-    return Boolean(this.url && this.token)
-  }
-
-  toConfig() {
-    return { url: this.url, token: this.token }
-  }
-
-  static fromConfig(config) {
-    return new HomeAssistantAuth(config)
   }
 }
 

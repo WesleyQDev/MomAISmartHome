@@ -1,21 +1,41 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { ENCRYPTION_ALGORITHM, IV_LENGTH, ENCRYPTION_KEY_PATH } = require('../config/constants');
+const { ENCRYPTION_ALGORITHM, IV_LENGTH, ENCRYPTION_KEY_PATH } = require('../config/constants.ts');
 
-const LEGACY_ENCRYPTION_KEY = 'momai_home_connector_secret_32b';
+// A chave legada era uma constante fixa versionada no código (pública, não é
+// segredo). Ela só serve para LER credenciais criadas por versões antigas; ao
+// ler, o getConnection re-criptografa com a chave real (.encryption-key /
+// ENCRYPTION_KEY). A resolução passa a ser: variável de ambiente local
+// MOMAI_SMARTHOME_LEGACY_KEY → arquivo não versionado data/.encryption-legacy-key
+// (modo 0600) → sem chave disponível, a credencial legada não é legível.
+function resolveLegacyKey() {
+  const env = process.env.MOMAI_SMARTHOME_LEGACY_KEY;
+  if (env && String(env).trim()) return String(env).trim();
+  const file = path.join(__dirname, '..', '..', 'data', '.encryption-legacy-key');
+  try {
+    if (fs.existsSync(file)) {
+      const content = fs.readFileSync(file, 'utf8').trim();
+      if (content) return content;
+    }
+  } catch {}
+  return null;
+}
 
 class TokenManager {
+  dbManager: any = null
+  encryptionSecret: string = ''
+
   constructor(dbManager) {
     this.dbManager = dbManager;
     this.encryptionSecret = process.env.ENCRYPTION_KEY || this._loadOrCreateKey();
   }
 
-  _loadOrCreateKey(customDir) {
+  _loadOrCreateKey(customDir = null) {
     const candidatePaths = [
       customDir ? path.join(customDir, '.encryption-key') : null,
       ENCRYPTION_KEY_PATH,
-      path.join(require('../config/constants').DEFAULT_DB_PATH, '..', '.encryption-key'),
+      path.join(require('../config/constants.ts').DEFAULT_DB_PATH, '..', '.encryption-key'),
       path.join(__dirname, '..', '..', 'data', '.encryption-key')
     ].filter(Boolean);
 
@@ -137,7 +157,7 @@ class TokenManager {
         } catch {
           const candidateKeys = [
             ENCRYPTION_KEY_PATH,
-            path.join(require('../config/constants').DEFAULT_DB_PATH, '..', '.encryption-key'),
+            path.join(require('../config/constants.ts').DEFAULT_DB_PATH, '..', '.encryption-key'),
             path.join(__dirname, '..', '..', 'data', '.encryption-key')
           ];
           for (const kPath of candidateKeys) {
@@ -153,10 +173,16 @@ class TokenManager {
             } catch {}
           }
           if (!config) {
-            try {
-              config = this.decrypt(encryptedPayload, LEGACY_ENCRYPTION_KEY);
-              migrated = true;
-            } catch {}
+            // Último recurso: chave legada (env ou arquivo não versionado).
+            // Nunca hardcoded no código. Após ler, re-criptografa na linha de
+            // `if (migrated)` abaixo.
+            const legacyKey = resolveLegacyKey();
+            if (legacyKey) {
+              try {
+                config = this.decrypt(encryptedPayload, legacyKey);
+                migrated = true;
+              } catch {}
+            }
           }
         }
       } else if (encryptedPayload && typeof encryptedPayload === 'object' && (encryptedPayload.url || encryptedPayload.token)) {

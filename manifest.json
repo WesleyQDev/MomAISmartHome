@@ -8,7 +8,7 @@
   "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 9.5L12 2l9 7.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9.5z\"/><path d=\"M6.5 12a7.8 7.8 0 0 1 11 0\"/><path d=\"M9 15a3.6 3.6 0 0 1 6 0\"/><path d=\"M12 18h.01\"/></svg>",
   "author": "MomAI Team",
   "background": true,
-  "backgroundScript": "runtime.js",
+  "backgroundScript": "runtime.ts",
   "permissions": ["network", "storage", "network:persistent"],
   "sdkVersion": 1,
   "momai_compat": ">=1.7.0",
@@ -21,6 +21,7 @@
   },
   "eventTypes": {
     "state_changed": {
+      "label": "Estado do Dispositivo Alterado",
       "fields": {
         "deviceName": { "label": "Dispositivo", "type": "string" },
         "deviceState": { "label": "Estado", "type": "string" },
@@ -28,12 +29,14 @@
         "entityId": { "label": "Entidade", "type": "string" }
       }
     },
-    "open_overlay": {},
-    "connection_changed": {}
+    "open_overlay": { "label": "Controle Flutuante Aberto" },
+    "close_overlay": { "label": "Controle Flutuante Fechado" },
+    "connection_changed": { "label": "Conexão com Home Assistant Alterada" }
   },
   "tools": [
     {
       "name": "control_device",
+      "label": "Controlar Dispositivo Inteligente",
       "description": "Liga, desliga ou ajusta um dispositivo inteligente (luzes, interruptores, TV, ar condicionado, etc).",
       "parameters": {
         "type": "object",
@@ -49,6 +52,7 @@
     },
     {
       "name": "set_light_color",
+      "label": "Ajustar Luz / Cor",
       "description": "Muda a cor, brilho ou temperatura de cor de uma lâmpada ou fita LED.",
       "parameters": {
         "type": "object",
@@ -63,6 +67,7 @@
     },
     {
       "name": "control_tv_remote",
+      "label": "Controle de TV / Mídia",
       "description": "Controle de TV e reprodutores de mídia: comandos de controle remoto, alternância de entrada/fonte e reprodução.",
       "parameters": {
         "type": "object",
@@ -77,6 +82,7 @@
     },
     {
       "name": "control_climate",
+      "label": "Controlar Ar Condicionado / Clima",
       "description": "Ajusta temperatura alvo e modo de operação do ar condicionado ou termostato.",
       "parameters": {
         "type": "object",
@@ -90,6 +96,7 @@
     },
     {
       "name": "call_ha_service",
+      "label": "Executar Serviço no Home Assistant",
       "description": "Executa um serviço arbitrário do Home Assistant (domínio, serviço e dados JSON).",
       "parameters": {
         "type": "object",
@@ -103,6 +110,7 @@
     },
     {
       "name": "list_devices",
+      "label": "Listar Dispositivos",
       "description": "Lista todos os dispositivos inteligentes disponíveis com seus estados.",
       "parameters": {
         "type": "object",
@@ -113,6 +121,7 @@
     },
     {
       "name": "query_device",
+      "label": "Consultar Dispositivo",
       "description": "Obtém o estado detalhado de um dispositivo específico.",
       "parameters": {
         "type": "object",
@@ -123,20 +132,28 @@
       }
     },
     {
-      "name": "set_actions",
-      "description": "Configura as actions que o host executa automaticamente quando um dispositivo muda de estado.",
+      "name": "open_device_control",
+      "label": "Abrir Controle Flutuante",
+      "description": "Abre a interface de controle flutuante (overlay) de um dispositivo específico (TV, luz, ar condicionado, etc).",
       "parameters": {
         "type": "object",
-        "required": ["actions"],
+        "required": ["device_name"],
         "properties": {
-          "actions": { "type": "array", "description": "Lista de actions { id, target, tool, args }" }
+          "device_name": { "type": "string", "description": "Nome do dispositivo cujo controle deve ser exibido" }
         }
       }
     },
     {
-      "name": "get_actions",
-      "description": "Retorna as actions configuradas para o evento state_changed.",
-      "parameters": { "type": "object", "properties": {} }
+      "name": "close_device_control",
+      "label": "Fechar Controle Flutuante",
+      "description": "Fecha a interface de controle flutuante (overlay) aberta.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "device_name": { "type": "string", "description": "Nome do dispositivo cujo controle fechar (opcional)" },
+          "all": { "type": "boolean", "description": "Se true, fecha todos os controles abertos" }
+        }
+      }
     }
   ],
   "theme": {
@@ -145,6 +162,10 @@
   },
   "storage": {
     "description": "Armazena as conexões e credenciais do Home Assistant localmente de forma isolada. Desconectar desativa a auto-reconexão, mas preserva a credencial para uma nova conexão manual.",
-    "locations": ["smarthome.sqlite"]
+    "locations": [
+      "smarthome.sqlite (conexões criptografadas localmente em .encryption-key)",
+      "momai.storage: connections (credenciais do Home Assistant; criptografadas no banco local)",
+      "momai.storage: last_credentials (credencial transitória da última conexão, limpa ao desconectar)"
+    ]
   }
 }

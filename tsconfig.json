@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "node16",
+    "moduleResolution": "node16",
+    "strict": false,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": false,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "src/index.ts",
+    "src/actions.ts",
+    "src/auth/*.ts",
+    "src/config/*.ts",
+    "src/database/*.ts",
+    "src/integrations/**/*.ts",
+    "runtime.ts",
+    "test-runner.ts",
+    "runtime-shim.d.ts"
+  ]
+}

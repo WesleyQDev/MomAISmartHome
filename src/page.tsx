@@ -180,15 +180,41 @@ function getSessionToken(): string {
   return (typeof window !== 'undefined' && (window as any).api?.getSessionToken?.()) || ''
 }
 
+const EXT_FETCH_TIMEOUT_MS = 10000
+
+// fetch com timeout/AbortController: se o node-core/worker não responder, a
+// promessa resolve com um objeto de erro em vez de pendurar para sempre —
+// sem isso, um worker morto deixava a página em "Carregando" infinito.
 function extFetch(path: string, body?: any): Promise<any> {
-  return fetch(`${getApiBase()}${path}`, {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), EXT_FETCH_TIMEOUT_MS)
+  const url = `${getApiBase()}${path}`
+  return fetch(url, {
     method: body ? 'POST' : 'GET',
     headers: {
       'Content-Type': 'application/json',
       'X-Session-Token': getSessionToken()
     },
-    body: body ? JSON.stringify(body) : undefined
-  }).then((r) => r.json())
+    body: body ? JSON.stringify(body) : undefined,
+    signal: controller.signal
+  })
+    .then((r) => {
+      try {
+        return r.json()
+      } catch {
+        return {}
+      }
+    })
+    .catch((err) => {
+      const aborted = err && (err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.code === 20)
+      return {
+        ok: false,
+        error: aborted
+          ? 'O servidor do MomAI não respondeu (timeout). Verifique se o app está rodando.'
+          : (err?.message || 'Falha de rede ao falar com o servidor')
+      }
+    })
+    .finally(() => clearTimeout(timer))
 }
 
 async function sendCommand(toolName: string, args: any = {}): Promise<any> {
@@ -272,19 +298,31 @@ function formatEntityValue(value?: string | number | null, unit?: string, device
 function DeviceControlModal({ device, allDevices, onClose, onToggle }: { device: Device; allDevices: Device[]; onClose: () => void; onToggle: (d: Device) => void }) {
   const isMediaOrRemote = device.domain === 'media_player' || device.domain === 'remote'
   return (
-    <div className="sh-modal-overlay" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()}>
+    <div
+      className="sh-modal-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: '340px', display: 'flex', justifyContent: 'center', pointerEvents: 'auto' }}
+      >
         <DeviceControlCardContent
           device={device}
           allDevices={allDevices}
           onClose={onClose}
           onToggle={isMediaOrRemote ? undefined : onToggle}
           callServiceApi={async (domain, service, serviceData, providerType) => {
-            const winApi = (window as any).api
+            const winApi = (window as any).api || (window as any).momaiAPI
             if (typeof winApi?.callService === 'function') {
               return winApi.callService(domain, service, serviceData, providerType || 'homeassistant')
             }
-            return api.callService(domain, service, serviceData, providerType)
+            const res = await api.callService(domain, service, serviceData, providerType)
+            return res
           }}
           isOverlay={false}
         />
@@ -488,11 +526,24 @@ const SH_PLACEHOLDERS = [
 
 const SH_ENTITY_PARAMS = new Set(['contact', 'device_name', 'cameraId', 'monitorId'])
 
+const SH_STATE_LABELS: Record<string, string> = {
+  on: 'Ligado',
+  off: 'Desligado'
+}
+
+interface ShWhen {
+  device?: string
+  room?: string
+  state?: string
+  domain?: string
+}
+
 interface ShAction {
   id?: string
   target: string
   tool: string
   args?: Record<string, unknown>
+  when?: ShWhen
 }
 interface ShParam {
   type?: string
@@ -528,20 +579,48 @@ function shFormatArgs(args?: Record<string, unknown>): string {
     .join(' · ')
 }
 
+function shFormatWhen(when?: ShWhen): string {
+  if (!when) return ''
+  const parts: string[] = []
+  if (when.device?.trim()) parts.push(`dispositivo ${when.device.trim()}`)
+  if (when.room?.trim()) parts.push(`cômodo ${when.room.trim()}`)
+  if (when.state?.trim()) parts.push(SH_STATE_LABELS[when.state.trim()] || when.state.trim())
+  if (when.domain?.trim()) parts.push(`domínio ${when.domain.trim()}`)
+  return parts.join(', ')
+}
+
+// Ao editar uma ação, remove valores que são apenas um placeholder solto de
+// outro contexto (ex.: "{description}" ou "{event.imageDataUri}") salvos por
+// versões antigas, para o usuário ver o campo vazio e preencher de verdade.
+const SH_SOLO_PLACEHOLDER = /^\{[a-zA-Z0-9_.]+\}$/
+function cleanSavedArgs(args?: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(args || {})) {
+    if (typeof v === 'string' && SH_SOLO_PLACEHOLDER.test(v.trim())) continue
+    out[k] = v
+  }
+  return out
+}
+
 function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [catalog, setCatalog] = useState<ShExt[]>([])
   const [actions, setActions] = useState<ShAction[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [showDraft, setShowDraft] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [target, setTarget] = useState('')
   const [tool, setTool] = useState('')
   const [draftArgs, setDraftArgs] = useState<Record<string, unknown>>({})
+  const [draftWhen, setDraftWhen] = useState<ShWhen>({})
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
     setShowDraft(false)
+    setEditingId(null)
+    setDraftWhen({})
+    setSaveState('idle')
     Promise.all([
       extFetch('/extensions'),
       sendCommand('get_actions')
@@ -583,35 +662,60 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
   function defaultArgsFor(def?: ShTool): Record<string, unknown> {
     const out: Record<string, unknown> = {}
     for (const [key, param] of Object.entries(def?.parameters?.properties || {})) {
-      out[key] = param && param.default !== undefined ? param.default : ''
+      const d = param && param.default
+      // Não pré-preenche placeholders {token} vindos do schema de outra
+      // extensão (ex.: {event.imageDataUri} do Vision no Smart Home).
+      out[key] = typeof d === 'string' && d.includes('{') ? '' : (d ?? '')
     }
     return out
   }
 
-  function addAction() {
+  function persist(next: ShAction[]) {
+    setActions(next)
+    setSaveState('saving')
+    sendCommand('set_actions', { actions: next })
+      .then(() => setSaveState('saved'))
+      .catch(() => setSaveState('error'))
+  }
+
+  function startEdit(a: ShAction) {
+    setEditingId(a.id || null)
+    setTarget(a.target)
+    setTool(a.tool)
+    setDraftArgs(cleanSavedArgs(a.args))
+    setDraftWhen(a.when ? { ...a.when } : {})
+    setShowDraft(true)
+  }
+
+  function cancelDraft() {
+    setShowDraft(false)
+    setEditingId(null)
+  }
+
+  function saveDraft() {
     if (!target || !tool) return
     const clean: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(draftArgs)) {
       if (typeof value === 'string' && !value.trim()) continue
       clean[key] = value
     }
-    setActions((prev) => [
-      ...prev,
-      { id: `act-${Date.now()}`, target, tool, args: Object.keys(clean).length ? clean : undefined }
-    ])
-    setShowDraft(false)
-  }
-
-  async function save() {
-    setSaving(true)
-    try {
-      await sendCommand('set_actions', { actions })
-      onClose()
-    } catch {
-      /* falha ao salvar */
-    } finally {
-      setSaving(false)
+    const cleanWhen: ShWhen = {}
+    for (const key of ['device', 'room', 'state', 'domain'] as const) {
+      const value = draftWhen[key]
+      if (typeof value === 'string' && value.trim()) cleanWhen[key] = value.trim()
     }
+    const entry: ShAction = {
+      id: editingId || `act-${Date.now()}`,
+      target,
+      tool,
+      args: Object.keys(clean).length ? clean : undefined,
+      when: Object.keys(cleanWhen).length ? cleanWhen : undefined
+    }
+    const next = editingId
+      ? actions.map((a) => (a.id === editingId ? entry : a))
+      : [...actions, entry]
+    persist(next)
+    cancelDraft()
   }
 
   if (!open) return null
@@ -666,8 +770,8 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
 
         <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto' }}>
           <p style={{ margin: 0, fontSize: 12, color: '#a1a1aa' }}>
-            Ações executadas automaticamente quando um dispositivo mudar de estado (ex.: luz
-            ligou → Vision tira um print).
+            Ações executadas automaticamente quando um dispositivo mudar de estado. Defina o
+            gatilho de cada ação (ex.: luz da sala ligou → enviar mensagem no WhatsApp).
           </p>
 
           {loading ? (
@@ -677,7 +781,7 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#d4d4d8' }}>Ações</span>
                 <button
-                  onClick={() => setShowDraft((v) => !v)}
+                  onClick={showDraft ? cancelDraft : () => setShowDraft(true)}
                   style={{
                     fontSize: 11,
                     fontWeight: 500,
@@ -720,19 +824,44 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
                       <span style={{ color: '#a1a1aa' }}> / </span>
                       {SH_TOOL_LABELS[a.tool] || shHumanize(a.tool)}
                     </div>
+                    {a.when && Object.keys(a.when).length > 0 ? (
+                      <div style={{ fontSize: 11, color: '#34d399', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        Quando: {shFormatWhen(a.when)}
+                      </div>
+                    ) : null}
                     {a.args && Object.keys(a.args).length > 0 ? (
                       <div style={{ fontSize: 11, color: '#71717a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {shFormatArgs(a.args)}
                       </div>
                     ) : null}
                   </div>
-                  <button
-                    onClick={() => setActions(actions.filter((_, j) => j !== i))}
-                    style={{ background: 'transparent', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: 14 }}
-                    aria-label="Remover"
-                  >
-                    ×
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      onClick={() => startEdit(a)}
+                      title="Editar"
+                      aria-label="Editar"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#71717a',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        padding: '4px',
+                        display: 'flex'
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => persist(actions.filter((_, j) => j !== i))}
+                      style={{ background: 'transparent', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: 14 }}
+                      aria-label="Remover"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
               ))}
 
@@ -748,6 +877,54 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
                     padding: 12
                   }}
                 >
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                      Gatilho (quando executar)
+                    </label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                          Dispositivo
+                        </label>
+                        <ShSearchableInput
+                          target="momaismarthome"
+                          paramKey="device_name"
+                          value={draftWhen.device ?? ''}
+                          onChange={(v) => setDraftWhen((d) => ({ ...d, device: v }))}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                          Cômodo
+                        </label>
+                        <input
+                          type="text"
+                          value={draftWhen.room ?? ''}
+                          onChange={(e) => setDraftWhen((d) => ({ ...d, room: e.target.value }))}
+                          placeholder="Qualquer"
+                          style={shInputStyle}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
+                          Estado
+                        </label>
+                        <select
+                          value={draftWhen.state ?? ''}
+                          onChange={(e) => setDraftWhen((d) => ({ ...d, state: e.target.value }))}
+                          style={shSelectStyle}
+                        >
+                          <option value="">Qualquer</option>
+                          <option value="on">Ligado (on)</option>
+                          <option value="off">Desligado (off)</option>
+                        </select>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 10, color: '#71717a' }}>
+                        Deixe vazio para rodar com qualquer mudança de estado.
+                      </p>
+                    </div>
+                  </div>
+
                   <div>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a1a1aa', marginBottom: 4 }}>
                       Extensão alvo
@@ -851,7 +1028,7 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
                       </div>
 
                       <button
-                        onClick={addAction}
+                        onClick={saveDraft}
                         style={{
                           fontSize: 11,
                           fontWeight: 600,
@@ -863,7 +1040,7 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
                           cursor: 'pointer'
                         }}
                       >
-                        Usar esta ação
+                        {editingId ? 'Salvar alterações' : 'Usar esta ação'}
                       </button>
                     </>
                   ) : null}
@@ -878,28 +1055,32 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
             padding: '12px 20px',
             borderTop: '1px solid rgba(255,255,255,0.08)',
             display: 'flex',
-            justifyContent: 'flex-end',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             gap: 8
           }}
         >
-          <button
-            onClick={onClose}
+          <span
             style={{
-              fontSize: 12,
-              fontWeight: 500,
-              color: '#d4d4d8',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 10,
-              padding: '8px 16px',
-              cursor: 'pointer'
+              fontSize: 11,
+              color:
+                saveState === 'error'
+                  ? '#f87171'
+                  : saveState === 'saved'
+                    ? '#34d399'
+                    : '#71717a'
             }}
           >
-            Cancelar
-          </button>
+            {saveState === 'saving'
+              ? 'Salvando…'
+              : saveState === 'saved'
+                ? 'Salvo automaticamente'
+                : saveState === 'error'
+                  ? 'Erro ao salvar. Tente novamente.'
+                  : 'As ações são salvas automaticamente.'}
+          </span>
           <button
-            onClick={save}
-            disabled={saving}
+            onClick={onClose}
             style={{
               fontSize: 12,
               fontWeight: 600,
@@ -908,11 +1089,10 @@ function AutomationsModal({ open, onClose }: { open: boolean; onClose: () => voi
               border: 'none',
               borderRadius: 10,
               padding: '8px 20px',
-              cursor: 'pointer',
-              opacity: saving ? 0.6 : 1
+              cursor: 'pointer'
             }}
           >
-            {saving ? 'Salvando…' : 'Salvar automações'}
+            Fechar
           </button>
         </div>
       </div>
@@ -1095,11 +1275,26 @@ export default function SmartHomePage() {
     loadStatus()
   }, [])
 
-  // Auto-sync every 5s to verify connection status & discover new devices
+  // Timeout de UI: se a primeira checagem falhou/travou (worker/node-core sem
+  // resposta), sai do "Carregando" após ~8s para a UI mostrar o card de
+  // desconectado (quando há conexão salva) ou o formulário de conexão.
+  useEffect(() => {
+    if (!loading) return
+    const t = setTimeout(() => setLoading(false), 8000)
+    return () => clearTimeout(t)
+  }, [loading])
+
+  // Auto-sync: 5s quando conectado, ~20s quando offline (só para detectar a
+  // volta do servidor). Polling agressivo com HA offline gerava uma cascata de
+  // timeouts/cooldowns a cada 5s; o SSE já cobre atualizações em tempo real.
   useEffect(() => {
     if (!hasSavedConnection) return
 
-    const interval = setInterval(async () => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    const tick = async () => {
+      if (cancelled) return
       try {
         const status = await api.getStatus()
         const haProvider = status?.providerStatus?.providers?.homeassistant
@@ -1111,21 +1306,26 @@ export default function SmartHomePage() {
           if (status?.lastError || haProvider?.error) {
             setConnectError(status?.lastError || haProvider?.error || null)
           }
-          return
+        } else {
+          setConnectError(null)
+          const devs = await api.getDevices()
+          if (Array.isArray(devs)) {
+            const deduplicated = deduplicateDevicesByName(devs)
+            setDevices(deduplicated)
+          }
         }
-
-        setConnectError(null)
-        const devs = await api.getDevices()
-        if (Array.isArray(devs)) {
-          const deduplicated = deduplicateDevicesByName(devs)
-          setDevices(deduplicated)
-        }
+        timer = setTimeout(tick, connected ? 5000 : 20000)
       } catch (err) {
         console.warn('[SmartHome] Erro na sincronização periódica:', err)
+        timer = setTimeout(tick, 20000)
       }
-    }, 5000)
+    }
 
-    return () => clearInterval(interval)
+    tick()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [hasSavedConnection])
 
   // Listen for real-time state_changed & connection_changed events via SSE stream
@@ -1249,13 +1449,19 @@ export default function SmartHomePage() {
     }
     try {
       const conns = await api.listConnections()
-      setConnections(conns || [])
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(CACHE_CONNS_KEY, JSON.stringify(conns || []))
+      const connsOk = Array.isArray(conns)
+      if (connsOk) {
+        setConnections(conns)
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(CACHE_CONNS_KEY, JSON.stringify(conns))
+        }
       }
       await fetchLastConnection()
 
-      const hasSaved = Boolean(conns && conns.length > 0)
+      // Só conclui "não há conexão salva" quando o backend respondeu de fato;
+      // se listConnections falhou/timeout (worker morto), mantém o valor em
+      // cache — senão a página mostraria o formulário em vez do desconectado.
+      const hasSaved = connsOk ? Boolean(conns && conns.length > 0) : hasSavedConnection
       setHasSavedConnection(hasSaved)
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem(CACHE_HAS_SAVED_KEY, hasSaved ? 'true' : 'false')
@@ -1471,7 +1677,7 @@ export default function SmartHomePage() {
         />
       )}
 
-      {loading ? (
+      {loading && !hasSavedConnection ? (
         <div className="sh-auth"><p style={{ color: '#94a3b8' }}>Carregando...</p></div>
       ) : !hasSavedConnection ? (
         <div className="sh-auth">
@@ -1598,21 +1804,6 @@ export default function SmartHomePage() {
             <div className="sh-actions">
               <button
                 className="sh-btn"
-                onClick={() => setShowAutomations(true)}
-                title="Automações: ações automáticas quando um dispositivo mudar de estado"
-                style={{
-                  background: 'rgba(56, 189, 248, 0.12)',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56, 189, 248, 0.25)',
-                  cursor: 'pointer'
-                }}
-              >
-                <SvgAutomation size={15} />
-                <span>Automações</span>
-              </button>
-
-              <button
-                className="sh-btn"
                 onClick={handleResync}
                 disabled={isSyncing}
                 title="Resincronizar dispositivos do Home Assistant"
@@ -1696,6 +1887,8 @@ export default function SmartHomePage() {
                 </div>
               </div>
             </div>
+          ) : loading ? (
+            <div className="sh-auth"><p style={{ color: '#94a3b8' }}>Carregando...</p></div>
           ) : (
             <>
               {/* Filter Bar right at top */}
@@ -1848,7 +2041,6 @@ export default function SmartHomePage() {
           )}
         </>
       )}
-      <AutomationsModal open={showAutomations} onClose={() => setShowAutomations(false)} />
     </div>
   )
 }

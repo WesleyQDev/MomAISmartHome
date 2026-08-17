@@ -15,13 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install production dependencies
-        run: npm install --omit=dev --no-audit --no-fund
+        run: pnpm install --prod --frozen-lockfile
 
       - name: Build UI bundles
         run: node build.mjs
@@ -34,7 +38,7 @@ jobs:
       - name: Create release ZIP with node_modules
         run: |
           ZIP="MomAISmartHome-${GITHUB_REF_NAME}.zip"
-          zip -r "$ZIP" manifest.json SKILL.md runtime.js package.json README.md LICENSE icon.svg \
+          zip -r "$ZIP" manifest.json SKILL.md runtime.ts package.json README.md LICENSE icon.svg \
             dist src node_modules -x "node_modules/.cache/*"
           echo "asset=$ZIP" >> "$GITHUB_ENV"
 

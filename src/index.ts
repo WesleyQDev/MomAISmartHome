@@ -5,14 +5,24 @@ try {
   require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 } catch (e) {}
 
-const DatabaseManager = require('./database/database');
-const TokenManager = require('./auth/tokenManager');
-const HomeAssistantAuth = require('./auth/haAuth');
-const DeviceManager = require('./integrations/deviceManager');
+const DatabaseManager = require('./database/database.ts');
+const TokenManager = require('./auth/tokenManager.ts');
+const HomeAssistantAuth = require('./auth/haAuth.ts');
+const DeviceManager = require('./integrations/deviceManager.ts');
 
 class MomAIHomeConnector extends EventEmitter {
-  constructor(options = {}) {
+  dbManager: any = null
+  tokenManager: any = null
+  auth: any = null
+  devices: any = null
+  isConnected = false
+  connections: any[] = []
+  lastCredentials: any = null
+  _mutex: Promise<any> = Promise.resolve()
+
+  constructor(options: any = {}) {
     super();
+    this._lastWarnTs = 0;
     this.dbManager = new DatabaseManager(options.dbPath);
     this.tokenManager = new TokenManager(this.dbManager);
     this.auth = new HomeAssistantAuth(options.authOptions);
@@ -30,6 +40,17 @@ class MomAIHomeConnector extends EventEmitter {
 
     this.isConnected = false;
     this.connections = [];
+  }
+
+  // Log com throttle: quando o Home Assistant está fora, o init roda a cada
+  // comando e cada warn ia para o main.log (escrita em disco no processo
+  // principal) a cada poucos segundos — isso contribuía para micro-travamentos
+  // no app. Máximo 1 aviso por minuto.
+  _warn(message, detail) {
+    const now = Date.now();
+    if (now - (this._lastWarnTs || 0) < 60000) return;
+    this._lastWarnTs = now;
+    console.warn(message, detail ?? '');
   }
 
   async init(momai) {
@@ -60,28 +81,50 @@ class MomAIHomeConnector extends EventEmitter {
           if (regRes && regRes.success !== false) {
             this.isConnected = true;
           } else {
-            console.warn(`[MomAIHomeConnector] Provider ${conn.id} offline/falha na conexão:`, regRes?.error);
+            this._warn(`[MomAIHomeConnector] Provider ${conn.id} offline/falha na conexão:`, regRes?.error);
           }
         } catch (regErr) {
-          console.warn(`[MomAIHomeConnector] Erro ao registrar provider para ${conn.id}:`, regErr.message);
+          this._warn(`[MomAIHomeConnector] Erro ao registrar provider para ${conn.id}:`, regErr.message);
         }
       } catch (err) {
-        console.warn(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}:`, err.message);
+        this._warn(`[MomAIHomeConnector] Falha ao restaurar conexão ${conn.id}:`, err.message);
       }
     }
 
     return this.getStatus();
   }
 
+  // Mutex simples (promise chain) serializando ensureConnected/init: evita
+  // que duas chamadas concorrentes criem providers em paralelo e deixem
+  // WebSocket órfão quando o HA está offline (M2).
+  _withLock(fn) {
+    const run = this._mutex.then(fn, fn);
+    this._mutex = run.then(() => {}, () => {});
+    return run;
+  }
+
   async ensureConnected(momai) {
-    const status = this.devices.getStatus();
-    if (this.isConnected && this.connections.length > 0 && status.connected) {
+    return this._withLock(async () => {
+      const status = this.devices.getStatus();
+      const haProvider = this.devices?.providers?.get?.('homeassistant') || status?.providers?.homeassistant;
+      if (this.isConnected && this.connections.length > 0 && status.connected && haProvider?.connected) {
+        return this.getStatus();
+      }
+
+      if (haProvider && typeof haProvider.connect === 'function' && haProvider.url && haProvider.token) {
+        try {
+          const res = await haProvider.connect();
+          if (res && res.success !== false) {
+            this.isConnected = true;
+            return this.getStatus();
+          }
+        } catch {}
+      }
+
+      await this.init(momai).catch(() => {});
+
       return this.getStatus();
-    }
-
-    await this.init(momai).catch(() => {});
-
-    return this.getStatus();
+    });
   }
 
   async connectToHomeAssistant(url, token, name, momai) {
@@ -182,7 +225,7 @@ class MomAIHomeConnector extends EventEmitter {
       try {
         const savedConns = await momai.storage.get('connections');
         if (savedConns && typeof savedConns === 'object') {
-          const entries = Object.values(savedConns);
+          const entries = Object.values<any>(savedConns);
           if (entries.length > 0) {
             const last = entries[entries.length - 1];
             if (last && last.url) {
@@ -243,13 +286,15 @@ class MomAIHomeConnector extends EventEmitter {
     const devices = await this.getDevices(connectionId);
     if (connectionId && devices.length > 0) {
       await this.tokenManager.cacheEntities(connectionId, devices).catch(() => {});
-    } else if (this.connections.length > 0 && devices.length > 0) {
-      for (const conn of this.connections) {
-        await this.tokenManager.cacheEntities(conn.id, devices).catch(() => {});
-      }
+    } else if (this.connections.length === 1 && devices.length > 0) {
+      // Conexão única (design atual): grava o cache sob a conexão correta em
+      // vez de duplicar os devices sob TODAS as conexões (B3). Com múltiplas
+      // conexões não dá para saber a origem de cada device sem connection_id.
+      await this.tokenManager.cacheEntities(this.connections[0].id, devices).catch(() => {});
     }
     return devices;
   }
+
 
   async getDeviceState(deviceId, connectionType) {
     return this.devices.getDeviceState(deviceId, connectionType);
@@ -279,8 +324,8 @@ class MomAIHomeConnector extends EventEmitter {
     return this.devices.setClimate(deviceId, temperature, hvacMode, connectionType);
   }
 
-  async callService(domain, service, data) {
-    return this.devices.callService(domain, service, data);
+  async callService(domain, service, data, connectionType) {
+    return this.devices.callService(domain, service, data, connectionType);
   }
 
   async removeConnection(connectionId, momai) {
