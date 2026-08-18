@@ -39,14 +39,13 @@ const EXCLUDED_DOMAINS = new Set([
   'system_health'
 ])
 
-// Timeout de cada request HTTP para o Home Assistant. 2500ms era curto demais:
-// uma leve queda de rede / resposta lenta estourava o request, o provider era
-// marcado como desconectado na hora e a UI mostrava a tela de "desconectado".
-const REQUEST_TIMEOUT_MS = 8000
+// Timeout de cada request HTTP para o Home Assistant. 4000ms permite falhar
+// rápido antes do timeout de fetch de 10s da interface.
+const REQUEST_TIMEOUT_MS = 4000
 // Falhas transitórias (rede lenta, timeout, queda breve) NÃO derrubam a conexão
 // de imediato: só marcam desconectado após N falhas consecutivas (com probe de
 // recuperação entre elas), para uma leve queda não virar a tela de desconectado.
-const TRANSIENT_ERRORS_BEFORE_DISCONNECT = 2
+const TRANSIENT_ERRORS_BEFORE_DISCONNECT = 10
 // Atraso do probe de recuperação após a primeira falha transitória.
 const DISCONNECT_PROBE_DELAY_MS = 5000
 
@@ -476,29 +475,31 @@ class HomeAssistantProvider extends BaseProvider {
 
     let config = null
     let lastErr = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        config = await this._get('/api/config')
-        break
-      } catch (err) {
-        lastErr = err
-        if (err.code === 'ha_network' || err.code === 'ha_auth' || err.code === 'ha_timeout') break
-        if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, 200))
-        }
-      }
+    try {
+      config = await this._get('/api/config')
+    } catch (err) {
+      lastErr = err
     }
     if (!config) {
       const code = lastErr?.code
       let friendly = `Falha ao conectar ao Home Assistant em ${this.url}: ${lastErr?.message || 'sem resposta'}`
       if (code === 'ha_auth') {
         friendly = 'Token do Home Assistant inválido ou expirado (HTTP 401). Gere um novo Long-Lived Access Token em: Perfil do usuário → Segurança → Tokens de Acesso de Longa Duração.'
+        // Auth inválido é o ÚNICO caso em que derruba a conexão: o token/credencial
+        // realmente não funciona, então a UI deve mostrar o card de reconexão.
+        this._setConnected(false, friendly)
       } else if (code === 'ha_timeout') {
         friendly = `O servidor Home Assistant em ${this.url} demorou demais para responder. Verifique se ele está ligado e acessível.`
       } else if (code === 'ha_network') {
         friendly = `Não foi possível acessar o servidor em ${this.url} (conexão recusada ou offline). Verifique se o Home Assistant está ligado, se a URL/IP está correto e se está na mesma rede.`
       }
-      this._setConnected(false, friendly)
+      // Falhas de rede/timeout NÃO derrubam uma conexão já ativa: uma queda breve
+      // ou um comando que dispara ensureConnected() não pode transformar o estado
+      // em "desconectado" (que derrubaria a UI). Apenas registra o erro e lança;
+      // a reconexão/recovery é responsabilidade do WS e do polling em background.
+      if (code !== 'ha_auth') {
+        this.lastError = friendly
+      }
       const err = new Error(friendly)
       err.code = code || 'ha_error'
       throw err
@@ -558,13 +559,11 @@ class HomeAssistantProvider extends BaseProvider {
       this.lastError = null
       return devices
     } catch (err) {
-      // Se o token/servidor caiu ou deu 401, marca desconectado para a UI mostrar o card de reconexão.
-      // Erros transitórios (rede lenta/timeout/queda breve) passam pelo grace
-      // period: uma leve queda não derruba a conexão na hora.
+      // Erros ao listar dispositivos NÃO derrubam a conexão.
+      // Apenas auth inválido (401) marca desconectado — os demais são
+      // falhas transitórias que o SSE/WebSocket vai recuperar.
       if (err.code === 'ha_auth' || (err.message && err.message.includes('401'))) {
         this._setConnected(false, 'Token do Home Assistant inválido ou expirado (HTTP 401 Unauthorized)')
-      } else if (err.code === 'ha_network' || err.code === 'ha_timeout') {
-        this._handleTransientFailure(err)
       } else {
         this.lastError = err.message
       }
@@ -583,13 +582,9 @@ class HomeAssistantProvider extends BaseProvider {
       this.cachedDevices.set(device.id, device)
       return device
     } catch (err) {
-      if (err.code === 'ha_auth' || (err.message && err.message.includes('401'))) {
-        this.connected = false
-        this.lastError = err.message
-      } else if (err.code === 'ha_network' || err.code === 'ha_timeout') {
-        // Leve queda não derruba a conexão: passa pelo grace period.
-        this._handleTransientFailure(err)
-      }
+      // Erros em getDeviceState NUNCA devem derrubar a conexão. A reconexão
+      // é responsabilidade exclusiva de connect()/listDevices explícito.
+      // Apenas loga o erro e retorna null — o chamador decide se quer retry.
       console.warn('[HAProvider] Erro ao consultar estado do dispositivo:', err.message)
       return null
     }
@@ -951,14 +946,10 @@ class HomeAssistantProvider extends BaseProvider {
   }
 
   async callService(domain, service, data = {}) {
-    if (!this.connected) {
-      if (this.token && this.url) {
-        try {
-          await this.connect()
-        } catch {}
-      }
-    }
-    if (!this.connected) throw new Error('Not connected to Home Assistant')
+    // Fail-fast: nunca tenta reconectar no call path — a reconexão é feita
+    // em background pelo sync/polling. Evita travar o worker por 4-8s com
+    // DNS lookups que falham (homeassistant.local) quando HA está offline.
+    if (!this.connected) throw new Error('Home Assistant offline ou desconectado')
     // Segurança: valida domain/service para impedir path traversal — valores
     // como "../config" ou "config" normalizariam para endpoints arbitrários.
     // Domínios/serviços do HA são [a-z0-9_] (ex.: light.turn_on).

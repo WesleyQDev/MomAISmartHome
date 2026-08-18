@@ -554,6 +554,47 @@ const legacyTokenManager = new TokenManager(db)
   assert('troca de entrada com falha total retorna success:false', failInputRes && failInputRes.success === false)
   await failProvider.disconnect()
 
+  // Test 19: turnOn/turnOff usam o domínio do dispositivo (media_player/remote
+  // NÃO devem ir para light.* — quebrava o botão de desligar do controle remoto).
+  const tvProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  tvProvider.connected = true
+  tvProvider.cachedDevices.set('media_player.tv_quarto', { id: 'media_player.tv_quarto', state: { on: true } })
+  const tvCalls: any[] = []
+  tvProvider._post = async (p: string, payload: any) => { tvCalls.push({ p, payload }); return { ok: true } }
+  await tvProvider.turnOff('media_player.tv_quarto')
+  assert('turnOff de media_player usa media_player.turn_off (não light)', tvCalls[0]?.p === '/api/services/media_player/turn_off' && tvCalls[0]?.payload.entity_id === 'media_player.tv_quarto')
+  await tvProvider.turnOn('media_player.tv_quarto')
+  assert('turnOn de media_player usa media_player.turn_on (não light)', tvCalls[1]?.p === '/api/services/media_player/turn_on')
+  const remoteOff = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  remoteOff.connected = true
+  remoteOff.cachedDevices.set('remote.tv_quarto', { id: 'remote.tv_quarto', state: { on: true } })
+  const remoteCalls: any[] = []
+  remoteOff._post = async (p: string, payload: any) => { remoteCalls.push({ p, payload }); return { ok: true } }
+  await remoteOff.turnOff('remote.tv_quarto')
+  assert('turnOff de remote usa remote.turn_off (não light)', remoteCalls[0]?.p === '/api/services/remote/turn_off')
+  await tvProvider.disconnect()
+  await remoteOff.disconnect()
+
+  // Test 20: nenhum erro de comando derruba a conexão. `connect()` não deve
+  // marcar `connection_changed false` em falhas de rede/timeout — apenas em
+  // auth inválido (401).
+  const resilientProvider = new HomeAssistantProvider({ url: 'http://ha.local:8123', token: 'test_token' })
+  resilientProvider.connected = true
+  let connectionDown = false
+  resilientProvider.on('connection_changed', (evt) => {
+    if (evt?.connected === false) connectionDown = true
+  })
+  // Falha de rede ao conectar NÃO deve derrubar a conexão ativa.
+  resilientProvider._get = async () => { const e: any = new Error('ENOTFOUND'); e.code = 'ha_network'; throw e }
+  let connectRejected = false
+  try { await resilientProvider.connect() } catch (e) { connectRejected = true }
+  assert('connect() com falha de rede rejeita mas NÃO derruba conexão ativa', connectRejected && !connectionDown && resilientProvider.connected === true)
+  resilientProvider.connected = false
+  connectionDown = false
+  await resilientProvider.connect().catch(() => {})
+  assert('connect() com HA offline não emite connection_changed false quando já desconectado', !connectionDown)
+  await resilientProvider.disconnect()
+
   cleanupTestData()
   await db.close()
   console.log(`\n=== Resultado: ${passed} passaram, ${failed} falharam ===`)

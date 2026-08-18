@@ -73,8 +73,15 @@ export function SmartHomePanel(props: any) {
                 signal: controller.signal
               })
               return await res.json()
-            } catch (err) {
+            } catch (err: any) {
+              const aborted = err && (err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.code === 20)
               console.error('[SmartHomePanel] Erro ao executar serviço:', err)
+              return {
+                ok: false,
+                error: aborted
+                  ? 'O servidor do MomAI não respondeu (timeout). Verifique se o app está rodando.'
+                  : (err?.message || 'Falha de rede ao falar com o servidor')
+              }
             } finally {
               clearTimeout(timer)
             }

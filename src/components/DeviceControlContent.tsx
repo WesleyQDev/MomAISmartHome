@@ -505,10 +505,13 @@ export function DeviceControlCardContent({
 
     let disposed = false
     let syncing = false
+    let consecutiveErrors = 0
 
     const syncVolumeFromHomeAssistant = async () => {
-      if (syncing) return
+      if (syncing || disposed || consecutiveErrors >= 2) return
       syncing = true
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 4000)
       try {
         const response = await fetch(`${getApiBaseUrl()}/extensions/momaismarthome/command`, {
           method: 'POST',
@@ -519,36 +522,34 @@ export function DeviceControlCardContent({
           body: JSON.stringify({
             toolName: 'getDeviceState',
             args: { deviceId: volumeDevice.id, providerType: 'homeassistant' }
-          })
+          }),
+          signal: controller.signal
         })
         if (!response.ok) {
-          console.log('[SmartHome] syncVolumeFromHomeAssistant: HTTP', response.status)
+          consecutiveErrors++
           return
         }
 
         const result = await response.json()
+        consecutiveErrors = 0
         const refreshedDevice = result?.device as Device | null
         if (disposed || refreshedDevice?.state?.volume == null) {
-          console.log('[SmartHome] syncVolumeFromHomeAssistant: volume is null/undefined', JSON.stringify(result?.device?.state))
           return
         }
 
         const nextVolumePercent = volumeToPercent(refreshedDevice.state.volume)
-        console.log(`[SmartHome] syncVolumeFromHomeAssistant: volume=${refreshedDevice.state.volume} -> ${nextVolumePercent}%`)
         volumePercentRef.current = nextVolumePercent
         setVolumePercent(nextVolumePercent)
       } catch (err) {
-        console.error('[SmartHome] syncVolumeFromHomeAssistant error:', err)
+        consecutiveErrors++
       } finally {
+        clearTimeout(timer)
         syncing = false
       }
     }
 
     void syncVolumeFromHomeAssistant()
-    // Poll de volume só para dar feedback enquanto o controle de mídia está
-    // aberto; 2,5s é suficiente (o SSE já cobre updates em tempo real quando
-    // conectado) e evita martelar o worker a cada segundo.
-    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 2500)
+    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 5000)
     return () => {
       disposed = true
       window.clearInterval(intervalId)
@@ -611,6 +612,17 @@ export function DeviceControlCardContent({
     })
   }
 
+  // Domínio de controle do toggle. O botão power é compartilhado por todos os
+  // tipos de dispositivo (luz, switch, TV/media_player, remote...). Usar o
+  // domínio real do dispositivo é obrigatório: chamar `light.turn_off` com o
+  // entity_id de uma TV (media_player/remote) falha no Home Assistant e o
+  // botão nunca desliga.
+  const toggleDomain = (() => {
+    if (device.domain === 'remote') return 'remote'
+    if (device.domain === 'media_player') return 'media_player'
+    return device.domain === 'light' || device.domain === 'switch' || device.domain === 'fan' ? device.domain : 'light'
+  })()
+
   const handleToggle = () => {
     const nextState = !isOn
     beginUserInteraction()
@@ -619,7 +631,8 @@ export function DeviceControlCardContent({
     if (onToggle) {
       onToggle({ ...device, state: { ...device.state, on: nextState } })
     }
-    executeService('light', nextState ? 'turn_on' : 'turn_off', { entity_id: device.id })
+    const service = nextState ? 'turn_on' : 'turn_off'
+    executeService(toggleDomain, service, { entity_id: device.id })
       .catch(() => {
         isUserInteractingRef.current = false
       })

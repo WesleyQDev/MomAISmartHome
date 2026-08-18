@@ -401,6 +401,8 @@ function DeviceControlCardContent({
   async function defaultCallService(domain, service, data = {}, providerType = "homeassistant") {
     const baseUrl = getApiBaseUrl();
     const token = getSessionToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1e4);
     try {
       const res = await fetch(`${baseUrl}/extensions/momaismarthome/command`, {
         method: "POST",
@@ -411,17 +413,22 @@ function DeviceControlCardContent({
         body: JSON.stringify({
           toolName: "callService",
           args: { domain, service, data, providerType }
-        })
+        }),
+        signal: controller.signal
       });
       return await res.json();
     } catch (err) {
       console.error("[SmartHome] defaultCallService error:", err);
+    } finally {
+      clearTimeout(timer);
     }
   }
   const executeService = async (domain, service, data) => {
     if (callServiceApi) {
       try {
+        console.log(`[SmartHome] executeService via callServiceApi: ${domain}/${service}`);
         const res = await callServiceApi(domain, service, data, "homeassistant");
+        console.log("[SmartHome] executeService callServiceApi result:", JSON.stringify(res));
         if (res !== void 0) return res;
       } catch (err) {
         console.error("[SmartHome] callServiceApi failed:", err);
@@ -430,21 +437,27 @@ function DeviceControlCardContent({
     const winApi = window.api;
     if (typeof winApi?.callService === "function") {
       try {
+        console.log(`[SmartHome] executeService via winApi.callService: ${domain}/${service}`);
         const res = await winApi.callService(domain, service, data, "homeassistant");
+        console.log("[SmartHome] executeService winApi result:", JSON.stringify(res));
         return res;
       } catch (err) {
         console.error("[SmartHome] window.api.callService failed:", err);
       }
     }
+    console.log(`[SmartHome] executeService via defaultCallService: ${domain}/${service}`);
     return defaultCallService(domain, service, data, "homeassistant");
   };
   React2.useEffect(() => {
     if (device.domain !== "remote" && device.domain !== "media_player") return;
     let disposed = false;
     let syncing = false;
+    let consecutiveErrors = 0;
     const syncVolumeFromHomeAssistant = async () => {
-      if (syncing) return;
+      if (syncing || disposed || consecutiveErrors >= 2) return;
       syncing = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4e3);
       try {
         const response = await fetch(`${getApiBaseUrl()}/extensions/momaismarthome/command`, {
           method: "POST",
@@ -455,22 +468,31 @@ function DeviceControlCardContent({
           body: JSON.stringify({
             toolName: "getDeviceState",
             args: { deviceId: volumeDevice.id, providerType: "homeassistant" }
-          })
+          }),
+          signal: controller.signal
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          consecutiveErrors++;
+          return;
+        }
         const result = await response.json();
+        consecutiveErrors = 0;
         const refreshedDevice = result?.device;
-        if (disposed || refreshedDevice?.state?.volume == null) return;
+        if (disposed || refreshedDevice?.state?.volume == null) {
+          return;
+        }
         const nextVolumePercent = volumeToPercent(refreshedDevice.state.volume);
         volumePercentRef.current = nextVolumePercent;
         setVolumePercent(nextVolumePercent);
-      } catch {
+      } catch (err) {
+        consecutiveErrors++;
       } finally {
+        clearTimeout(timer);
         syncing = false;
       }
     };
     void syncVolumeFromHomeAssistant();
-    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 2500);
+    const intervalId = window.setInterval(syncVolumeFromHomeAssistant, 5e3);
     return () => {
       disposed = true;
       window.clearInterval(intervalId);
@@ -524,6 +546,11 @@ function DeviceControlCardContent({
       isUserInteractingRef.current = false;
     });
   };
+  const toggleDomain = (() => {
+    if (device.domain === "remote") return "remote";
+    if (device.domain === "media_player") return "media_player";
+    return device.domain === "light" || device.domain === "switch" || device.domain === "fan" ? device.domain : "light";
+  })();
   const handleToggle = () => {
     const nextState = !isOn;
     beginUserInteraction();
@@ -532,7 +559,8 @@ function DeviceControlCardContent({
     if (onToggle) {
       onToggle({ ...device, state: { ...device.state, on: nextState } });
     }
-    executeService("light", nextState ? "turn_on" : "turn_off", { entity_id: device.id }).catch(() => {
+    const service = nextState ? "turn_on" : "turn_off";
+    executeService(toggleDomain, service, { entity_id: device.id }).catch(() => {
       isUserInteractingRef.current = false;
     });
   };
@@ -555,30 +583,42 @@ function DeviceControlCardContent({
     if (cmdUpper === "YOUTUBE" || cmdUpper === "NETFLIX") {
       const sourceName = cmdUpper === "YOUTUBE" ? "YouTube" : "Netflix";
       const appId = cmdUpper === "YOUTUBE" ? "com.google.android.youtube.tv" : "com.netflix.ninja";
+      const mediaPlayers = effectiveAllDevices.filter((d) => d.domain === "media_player");
+      const mediaId = mediaPlayers.find((d) => d.state?.rawState !== "unavailable" && d.state?.volume != null)?.id || mediaPlayers.find((d) => d.state?.rawState !== "unavailable")?.id || volumeDevice?.id || targetId;
+      const candidateRemote2 = effectiveAllDevices.find((d) => d.domain === "remote") || (targetId !== mediaId ? { id: targetId } : null);
+      console.log(`[SmartHome] YouTube/Netflix: mediaId=${mediaId} candidateRemote=${candidateRemote2?.id} targetId=${targetId} allDomains=${effectiveAllDevices.map((d) => d.id).join(",")}`);
       try {
+        console.log(`[SmartHome] YouTube/Netflix: trying media_player.play_media on ${mediaId}`);
         const res = await executeService("media_player", "play_media", {
-          entity_id: targetId,
+          entity_id: mediaId,
           media_content_type: "app",
           media_content_id: appId
         });
+        console.log("[SmartHome] YouTube/Netflix: media_player.play_media result:", JSON.stringify(res));
         if (res?.success !== false && res?.ok !== false) return;
       } catch (e) {
+        console.log("[SmartHome] YouTube/Netflix: media_player.play_media threw:", e);
       }
-      const candidateRemote2 = effectiveAllDevices.find((d) => d.domain === "remote");
       if (candidateRemote2) {
         try {
+          console.log(`[SmartHome] YouTube/Netflix: trying remote.turn_on on ${candidateRemote2.id}`);
           const res = await executeService("remote", "turn_on", {
             entity_id: candidateRemote2.id,
             activity: appId
           });
+          console.log("[SmartHome] YouTube/Netflix: remote.turn_on result:", JSON.stringify(res));
           if (res?.success !== false && res?.ok !== false) return;
         } catch (e) {
+          console.log("[SmartHome] YouTube/Netflix: remote.turn_on threw:", e);
         }
       }
       try {
-        const res = await executeService("media_player", "select_source", { entity_id: targetId, source: sourceName });
+        console.log(`[SmartHome] YouTube/Netflix: trying media_player.select_source on ${mediaId}`);
+        const res = await executeService("media_player", "select_source", { entity_id: mediaId, source: sourceName });
+        console.log("[SmartHome] YouTube/Netflix: media_player.select_source result:", JSON.stringify(res));
         if (res?.success !== false && res?.ok !== false) return;
       } catch (e) {
+        console.log("[SmartHome] YouTube/Netflix: media_player.select_source threw:", e);
       }
     }
     const inputActivityMap = {
@@ -723,7 +763,7 @@ function DeviceControlCardContent({
     await handleSendRemoteCommand(source);
   };
   const handleVolumeChange = async (direction) => {
-    const nextVolumePercent = Math.max(0, Math.min(100, volumePercentRef.current + (direction === "up" ? 10 : -10)));
+    const nextVolumePercent = Math.max(0, Math.min(100, volumePercentRef.current + (direction === "up" ? 1 : -1)));
     volumePercentRef.current = nextVolumePercent;
     setVolumePercent(nextVolumePercent);
     setActiveVolumeButton(direction);
@@ -731,7 +771,21 @@ function DeviceControlCardContent({
       clearTimeout(volumeFeedbackTimerRef.current);
     }
     volumeFeedbackTimerRef.current = setTimeout(() => setActiveVolumeButton(null), 1200);
-    await executeService("media_player", direction === "up" ? "volume_up" : "volume_down", { entity_id: volumeDevice.id });
+    const volumeLevel = nextVolumePercent / 100;
+    console.log(`[SmartHome] handleVolumeChange ${direction} -> ${nextVolumePercent}% device=${volumeDevice.id}`);
+    let result = await executeService("media_player", "volume_set", { entity_id: volumeDevice.id, volume_level: volumeLevel });
+    console.log("[SmartHome] handleVolumeChange volume_set result:", JSON.stringify(result));
+    if (result && result.ok === false) {
+      const service = direction === "up" ? "volume_up" : "volume_down";
+      console.log("[SmartHome] handleVolumeChange: volume_set failed, trying", service);
+      result = await executeService("media_player", service, { entity_id: volumeDevice.id });
+      console.log("[SmartHome] handleVolumeChange fallback result:", JSON.stringify(result));
+    }
+    if (result && result.ok === false) {
+      const revertedVolume = volumePercentRef.current - (direction === "up" ? 1 : -1);
+      volumePercentRef.current = Math.max(0, Math.min(100, revertedVolume));
+      setVolumePercent(volumePercentRef.current);
+    }
   };
   const currentDynamicIcon = getDynamicSvgIcon(device, 20, "#ffffff");
   if (device.domain === "remote" || device.domain === "media_player") {
@@ -1606,6 +1660,8 @@ function SmartHomePanel(props) {
         }
         const baseUrl = winApi?.getApiBaseUrl && winApi.getApiBaseUrl() || "http://127.0.0.1:8050";
         const token = winApi?.getSessionToken && winApi.getSessionToken() || "";
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1e4);
         try {
           const res = await fetch(`${baseUrl}/extensions/momaismarthome/command`, {
             method: "POST",
@@ -1616,11 +1672,19 @@ function SmartHomePanel(props) {
             body: JSON.stringify({
               toolName: "callService",
               args: { domain, service, data: serviceData, providerType: providerType || "homeassistant" }
-            })
+            }),
+            signal: controller.signal
           });
           return await res.json();
         } catch (err) {
+          const aborted = err && (err.name === "AbortError" || err.code === "ABORT_ERR" || err.code === 20);
           console.error("[SmartHomePanel] Erro ao executar servi\xE7o:", err);
+          return {
+            ok: false,
+            error: aborted ? "O servidor do MomAI n\xE3o respondeu (timeout). Verifique se o app est\xE1 rodando." : err?.message || "Falha de rede ao falar com o servidor"
+          };
+        } finally {
+          clearTimeout(timer);
         }
       },
       isOverlay: true

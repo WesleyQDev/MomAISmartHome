@@ -238,10 +238,23 @@ const api: BackendApi = {
 }
 
 function deduplicateDevicesByName(rawDevices: Device[]): Device[] {
+  // Domínios que controlam o mesmo dispositivo físico podem ser agrupados.
+  // Nunca misturar light/switch com media_player/remote — são aparelhos
+  // diferentes que podem compartilhar parte do nome (ex: "Quarto").
+  const DOMAIN_GROUP: Record<string, string> = {
+    light: 'lighting',
+    switch: 'lighting',
+    media_player: 'media',
+    remote: 'media',
+  }
+
   const map = new Map<string, Device[]>()
 
   for (const d of rawDevices) {
-    const key = d.name.toLowerCase().trim()
+    // Chave inclui nome + grupo de domínio: mesma luz e mesmo media_player
+    // chamados "Quarto" ficam em chaves diferentes.
+    const group = DOMAIN_GROUP[d.domain] || d.domain
+    const key = `${d.name.toLowerCase().trim()}::${group}`
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(d)
   }
@@ -252,7 +265,7 @@ function deduplicateDevicesByName(rawDevices: Device[]): Device[] {
     if (group.length === 1) {
       result.push(group[0])
     } else {
-      const primary = group.find((d) => (d.domain === 'media_player' || d.domain === 'light' || d.domain === 'climate') && d.online && d.state.rawState !== 'unavailable') || group.find((d) => d.domain === 'remote') || group[0]
+      const primary = group.find((d) => d.online && d.state.rawState !== 'unavailable') || group[0]
       const mergedDevice: Device = {
         ...primary,
         attributes: {
