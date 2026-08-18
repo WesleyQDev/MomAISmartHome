@@ -308,6 +308,49 @@ function formatEntityValue(value?: string | number | null, unit?: string, device
   return { primary: str }
 }
 
+// Tamanho da janela overlay por domínio — espelha o cálculo do runtime.ts no
+// caso `open_device_control`, para o overlay aberto pelo clique no card ter o
+// mesmo tamanho do overlay aberto pelo chat.
+function getOverlaySizeForDomain(domain: string): { width: number; height: number } {
+  if (domain === 'media_player' || domain === 'remote') return { width: 320, height: 520 }
+  if (domain === 'light') return { width: 320, height: 540 }
+  if (domain === 'climate') return { width: 320, height: 460 }
+  return { width: 300, height: 440 }
+}
+
+// Abre o MESMO overlay flutuante usado quando o controle é solicitado no chat
+// (tool `open_device_control`). O payload replica exatamente o que o runtime.ts
+// envia via `open_overlay`, para o host criar a janela overlay e renderizar o
+// panel `momaismarthome-panel` com `isOverlay={true}`.
+function openDeviceOverlay(device: Device, allDevices: Device[]) {
+  const overlayPayload = {
+    skillId: EXT_ID,
+    panel: 'dist/panel.js',
+    panelType: 'momaismarthome-panel',
+    strategy: 'replace',
+    overlayId: device.id,
+    overlaySize: getOverlaySizeForDomain(device.domain),
+    structuredResponse: {
+      type: 'momaismarthome-panel',
+      data: {
+        device,
+        allDevices
+      }
+    }
+  }
+
+  const openOverlay = (window as any)?.momaiAPI?.openOverlay || (window as any)?.api?.openOverlay
+  if (typeof openOverlay === 'function') {
+    try {
+      openOverlay(overlayPayload)
+      return true
+    } catch (err) {
+      console.warn('[SmartHome] Erro ao abrir overlay do dispositivo:', err)
+    }
+  }
+  return false
+}
+
 function DeviceControlModal({ device, allDevices, onClose, onToggle }: { device: Device; allDevices: Device[]; onClose: () => void; onToggle: (d: Device) => void }) {
   const isMediaOrRemote = device.domain === 'media_player' || device.domain === 'remote'
   return (
@@ -328,7 +371,7 @@ function DeviceControlModal({ device, allDevices, onClose, onToggle }: { device:
           device={device}
           allDevices={allDevices}
           onClose={onClose}
-          onToggle={isMediaOrRemote ? undefined : onToggle}
+          onToggle={onToggle}
           callServiceApi={async (domain, service, serviceData, providerType) => {
             const winApi = (window as any).api || (window as any).momaiAPI
             if (typeof winApi?.callService === 'function') {
@@ -1968,7 +2011,12 @@ export default function SmartHomePage() {
                         key={device.id}
                         className={`sh-card ${device.state.on ? 'on' : ''} ${device.domain}`}
                         onClick={() => {
-                          setSelectedDevice(device)
+                          // Abre o mesmo overlay flutuante do chat (open_device_control).
+                          // Só cai no modal da página se a API de overlay não existir.
+                          const opened = openDeviceOverlay(device, devices)
+                          if (!opened) {
+                            setSelectedDevice(device)
+                          }
                         }}
                       >
                         <div className="sh-card-header">
@@ -2053,6 +2101,15 @@ export default function SmartHomePage() {
             </>
           )}
         </>
+      )}
+
+      {selectedDevice && (
+        <DeviceControlModal
+          device={selectedDevice}
+          allDevices={devices}
+          onClose={() => setSelectedDevice(null)}
+          onToggle={toggleDevice}
+        />
       )}
     </div>
   )

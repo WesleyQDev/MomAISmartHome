@@ -560,7 +560,12 @@ function DeviceControlCardContent({
       onToggle({ ...device, state: { ...device.state, on: nextState } });
     }
     const service = nextState ? "turn_on" : "turn_off";
-    executeService(toggleDomain, service, { entity_id: device.id }).catch(() => {
+    const related = device.attributes?.relatedEntities || [device];
+    const promises = related.map((target) => {
+      const targetDomain = target.domain === "remote" || target.domain === "media_player" || target.domain === "light" || target.domain === "switch" || target.domain === "fan" ? target.domain : toggleDomain;
+      return executeService(targetDomain, service, { entity_id: target.id });
+    });
+    Promise.all(promises).catch(() => {
       isUserInteractingRef.current = false;
     });
   };

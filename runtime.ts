@@ -701,8 +701,22 @@ async function executeTool(toolName, args, momai) {
         device = allDevices.find((d) => d.domain === 'media_player' || d.domain === 'remote' || d.domain === 'tv')
       }
       if (!device) {
-        const devName = String(args.device_name || 'Controle').trim()
-        device = { id: 'tv_remote', name: devName || 'Controle TV', domain: 'media_player', provider: 'homeassistant', state: 'off' }
+        const rawName = String(args.device_name || 'Controle').trim()
+        const norm = normalizeString(rawName)
+        let domain = 'media_player'
+        if (norm.includes('luz') || norm.includes('lampada') || norm.includes('iluminacao') || norm.includes('led')) {
+          domain = 'light'
+        } else if (norm.includes('ar') || norm.includes('clima') || norm.includes('arcondicionado') || norm.includes('termostato')) {
+          domain = 'climate'
+        }
+        device = {
+          id: `${domain}_custom`,
+          name: rawName || 'Controle Remoto',
+          domain,
+          provider: 'homeassistant',
+          state: { on: false },
+          attributes: {}
+        }
       }
 
       let overlayWidth = 320
@@ -753,6 +767,7 @@ async function executeTool(toolName, args, momai) {
       return {
         ok: true,
         tool: 'open_device_control',
+        directResponse: `Abri o controle de "${device.name}" no overlay flutuante.`,
         instruction: `Interface de controle do dispositivo "${device.name}" aberta com sucesso no overlay flutuante.`
       }
     }

@@ -595,7 +595,12 @@ function DeviceControlCardContent({
       onToggle({ ...device, state: { ...device.state, on: nextState } });
     }
     const service = nextState ? "turn_on" : "turn_off";
-    executeService(toggleDomain, service, { entity_id: device.id }).catch(() => {
+    const related = device.attributes?.relatedEntities || [device];
+    const promises = related.map((target) => {
+      const targetDomain = target.domain === "remote" || target.domain === "media_player" || target.domain === "light" || target.domain === "switch" || target.domain === "fan" ? target.domain : toggleDomain;
+      return executeService(targetDomain, service, { entity_id: target.id });
+    });
+    Promise.all(promises).catch(() => {
       isUserInteractingRef.current = false;
     });
   };
@@ -1786,6 +1791,39 @@ function formatEntityValue(value, unit, deviceClass) {
   }
   return { primary: str };
 }
+function getOverlaySizeForDomain(domain) {
+  if (domain === "media_player" || domain === "remote") return { width: 320, height: 520 };
+  if (domain === "light") return { width: 320, height: 540 };
+  if (domain === "climate") return { width: 320, height: 460 };
+  return { width: 300, height: 440 };
+}
+function openDeviceOverlay(device, allDevices) {
+  const overlayPayload = {
+    skillId: EXT_ID,
+    panel: "dist/panel.js",
+    panelType: "momaismarthome-panel",
+    strategy: "replace",
+    overlayId: device.id,
+    overlaySize: getOverlaySizeForDomain(device.domain),
+    structuredResponse: {
+      type: "momaismarthome-panel",
+      data: {
+        device,
+        allDevices
+      }
+    }
+  };
+  const openOverlay = window?.momaiAPI?.openOverlay || window?.api?.openOverlay;
+  if (typeof openOverlay === "function") {
+    try {
+      openOverlay(overlayPayload);
+      return true;
+    } catch (err) {
+      console.warn("[SmartHome] Erro ao abrir overlay do dispositivo:", err);
+    }
+  }
+  return false;
+}
 function DeviceControlModal({ device, allDevices, onClose, onToggle }) {
   const isMediaOrRemote = device.domain === "media_player" || device.domain === "remote";
   return /* @__PURE__ */ React4.createElement(
@@ -1811,7 +1849,7 @@ function DeviceControlModal({ device, allDevices, onClose, onToggle }) {
           device,
           allDevices,
           onClose,
-          onToggle: isMediaOrRemote ? void 0 : onToggle,
+          onToggle,
           callServiceApi: async (domain, service, serviceData, providerType) => {
             const winApi = window.api || window.momaiAPI;
             if (typeof winApi?.callService === "function") {
@@ -2405,7 +2443,10 @@ function SmartHomePage() {
         key: device.id,
         className: `sh-card ${device.state.on ? "on" : ""} ${device.domain}`,
         onClick: () => {
-          setSelectedDevice(device);
+          const opened = openDeviceOverlay(device, devices);
+          if (!opened) {
+            setSelectedDevice(device);
+          }
         }
       },
       /* @__PURE__ */ React4.createElement("div", { className: "sh-card-header" }, /* @__PURE__ */ React4.createElement("div", { className: "sh-icon" }, dynamicSvgIcon), /* @__PURE__ */ React4.createElement("label", { className: "sh-toggle", onClick: (e) => e.stopPropagation() }, CONTROLLABLE_DOMAINS2.includes(device.domain) && /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement("input", { type: "checkbox", checked: device.state.on, onChange: () => toggleDevice(device) }), /* @__PURE__ */ React4.createElement("span", { className: "sh-slider" })))),
@@ -2420,7 +2461,15 @@ function SmartHomePage() {
         adjustTemp(device, 1);
       } }, "+"), device.state.temperature != null && /* @__PURE__ */ React4.createElement("span", { style: { fontSize: "12px", color: "#94a3b8" } }, "atual: ", device.state.temperature, "\xB0")), device.domain === "sensor" && /* @__PURE__ */ React4.createElement("div", { style: { marginTop: "8px" } }, /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "15px", color: "#38bdf8", fontWeight: 700, margin: 0 } }, formatted.primary), formatted.secondary && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "11px", color: "#94a3b8", margin: "2px 0 0", display: "flex", alignItems: "center", gap: "4px" } }, /* @__PURE__ */ React4.createElement(SvgClock, { size: 11 }), " ", formatted.secondary)), device.domain === "cover" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#94a3b8", marginTop: "8px" } }, device.state.isOpen ? "Aberto" : "Fechado", device.state.position != null ? ` (${device.state.position}%)` : ""), device.domain === "lock" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.locked ? "#34d399" : "#f87171", fontWeight: 600, marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, device.state.locked ? /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgLock, { size: 13, color: "#34d399" }), " Trancado") : /* @__PURE__ */ React4.createElement(React4.Fragment, null, /* @__PURE__ */ React4.createElement(SvgUnlock, { size: 13, color: "#f87171" }), " Destrancado")), device.domain === "media_player" && device.state.mediaTitle && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "12px", color: "#38bdf8", marginTop: "8px", display: "flex", alignItems: "center", gap: "6px" } }, /* @__PURE__ */ React4.createElement(SvgPlay, { size: 11, color: "#38bdf8" }), " ", device.state.mediaTitle), device.domain === "binary_sensor" && /* @__PURE__ */ React4.createElement("p", { style: { fontSize: "13px", color: device.state.on ? "#f87171" : "#94a3b8", fontWeight: 600, marginTop: "8px" } }, device.state.on ? "Ativo" : "Inativo"))
     );
-  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice })))));
+  })), /* @__PURE__ */ React4.createElement("div", { className: "sh-widgets-grid" }, /* @__PURE__ */ React4.createElement(LiveClockWidget, { activeDevicesCount: activeDevicesTotal, totalDevicesCount: devices.length }), sunDevice && /* @__PURE__ */ React4.createElement(SunWidget, { device: sunDevice }), weatherDevice && /* @__PURE__ */ React4.createElement(WeatherWidget, { device: weatherDevice })))), selectedDevice && /* @__PURE__ */ React4.createElement(
+    DeviceControlModal,
+    {
+      device: selectedDevice,
+      allDevices: devices,
+      onClose: () => setSelectedDevice(null),
+      onToggle: toggleDevice
+    }
+  ));
 }
 export {
   SmartHomePage as default
