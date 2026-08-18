@@ -11,7 +11,7 @@
   "backgroundScript": "runtime.ts",
   "permissions": ["network", "storage", "network:persistent"],
   "sdkVersion": 1,
-  "momai_compat": ">=1.7.0",
+  "momai_compat": ">=1.9.0",
   "sidebar": true,
   "ui": {
     "page": "dist/page.js",
